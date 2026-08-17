@@ -13,9 +13,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: "1.92"
+      - run: rustup show active-toolchain
       - run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev libxkbcommon-x11-dev
       - run: cargo test --locked
       - run: cargo clippy --locked -- -D warnings
@@ -26,9 +24,7 @@ jobs:
     runs-on: windows-2025
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: "1.92"
+      - run: rustup show active-toolchain
       - run: cargo test --locked
       - run: cargo clippy --locked -- -D warnings
       - run: cargo build --release --locked
@@ -45,10 +41,7 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: "1.92"
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - run: rustup show active-toolchain
       - run: rustup target add x86_64-apple-darwin
       - run: cargo test --locked
       - run: cargo build --release --locked --target aarch64-apple-darwin
@@ -73,9 +66,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: "1.92"
+      - run: rustup show active-toolchain
       - run: |
           sudo apt-get update
           sudo apt-get install -y appstream desktop-file-utils flatpak libfontconfig1-dev librsvg2-common libxkbcommon-x11-dev podman rpm uidmap
