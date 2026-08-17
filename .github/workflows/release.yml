@@ -98,4 +98,4 @@ jobs:
         run: |
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || \
             gh release create "$GITHUB_REF_NAME" --title "Agents Usage ${GITHUB_REF_NAME#v}" --generate-notes
-          gh release upload "$GITHUB_REF_NAME" release-assets/* --clobber
+          find release-assets -type f -exec gh release upload "$GITHUB_REF_NAME" --clobber {} +
