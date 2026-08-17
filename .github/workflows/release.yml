@@ -49,6 +49,7 @@ jobs:
         with:
           toolchain: "1.92"
           targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - run: rustup target add x86_64-apple-darwin
       - run: cargo test --locked
       - run: cargo build --release --locked --target aarch64-apple-darwin
       - run: cargo build --release --locked --target x86_64-apple-darwin
@@ -77,7 +78,7 @@ jobs:
           toolchain: "1.92"
       - run: |
           sudo apt-get update
-          sudo apt-get install -y appstream desktop-file-utils flatpak libfontconfig1-dev libxkbcommon-x11-dev podman rpm uidmap
+          sudo apt-get install -y appstream desktop-file-utils flatpak libfontconfig1-dev librsvg2-common libxkbcommon-x11-dev podman rpm uidmap
           sudo flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
           sudo flatpak install -y flathub org.freedesktop.Platform//25.08 org.freedesktop.Sdk//25.08
       - run: ./tools/package-linux.sh
