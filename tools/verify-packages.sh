@@ -21,15 +21,17 @@ done
 
 rpm -K "$RPM"
 test "$(rpm -qp --qf '%{VERSION}-%{RELEASE}.%{ARCH}' "$RPM")" = "$VERSION-1.$RPM_ARCH"
-rpm -qpl "$RPM" | grep -q '/usr/bin/agents-usage$'
-rpm -qpl "$RPM" | grep -q '/usr/share/gnome-shell/extensions/agents-usage@local/metadata.json$'
+RPM_CONTENTS="$(rpm -qpl "$RPM")"
+grep -q '/usr/bin/agents-usage$' <<<"$RPM_CONTENTS"
+grep -q '/usr/share/gnome-shell/extensions/agents-usage@local/metadata.json$' <<<"$RPM_CONTENTS"
 
 if command -v dpkg-deb >/dev/null 2>&1; then
   dpkg-deb --info "$DEB" >/dev/null
   test "$(dpkg-deb --field "$DEB" Version)" = "$VERSION"
   test "$(dpkg-deb --field "$DEB" Architecture)" = "$DEB_ARCH"
-  dpkg-deb --contents "$DEB" | grep -q 'usr/bin/agents-usage$'
-  dpkg-deb --contents "$DEB" | grep -q 'usr/share/gnome-shell/extensions/agents-usage@local/metadata.json$'
+  DEB_CONTENTS="$(dpkg-deb --contents "$DEB")"
+  grep -q 'usr/bin/agents-usage$' <<<"$DEB_CONTENTS"
+  grep -q 'usr/share/gnome-shell/extensions/agents-usage@local/metadata.json$' <<<"$DEB_CONTENTS"
 else
   podman run --rm --volume "$DEB:/package.deb:ro,Z" \
     docker.io/library/debian:bookworm-slim sh -c \
