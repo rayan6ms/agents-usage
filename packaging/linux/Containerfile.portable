@@ -1,0 +1,11 @@
+FROM docker.io/library/rust:1.92-bookworm
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        libfontconfig1-dev \
+        pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /workspace

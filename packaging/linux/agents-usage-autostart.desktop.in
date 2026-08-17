@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Agents Usage
+Comment=Start Agents Usage in the background
+Exec="@EXEC@" --background
+Icon=agents-usage
+Terminal=false
+StartupNotify=false
+X-GNOME-Autostart-enabled=true
+NoDisplay=true

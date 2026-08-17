@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.agentsusagetray.AgentsUsage</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <name>Agents Usage</name>
+  <summary>View coding-agent account usage</summary>
+  <description>
+    <p>Agents Usage is a compact desktop tray utility for viewing usage across local coding-agent accounts.</p>
+  </description>
+  <launchable type="desktop-id">io.github.agentsusagetray.AgentsUsage.desktop</launchable>
+  <provides>
+    <binary>agents-usage</binary>
+  </provides>
+  <releases>
+    <release version="0.2.2" date="2026-08-16"/>
+    <release version="0.2.1" date="2026-08-15"/>
+    <release version="0.2.0" date="2026-08-15"/>
+  </releases>
+  <content_rating type="oars-1.1"/>
+</component>

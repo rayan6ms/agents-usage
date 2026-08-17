@@ -1,0 +1,7 @@
+{
+  "uuid": "agents-usage@local",
+  "name": "Agents Usage",
+  "description": "GNOME Shell tray integration for Agents Usage.",
+  "version": 13,
+  "shell-version": ["49", "50"]
+}

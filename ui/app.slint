@@ -1,0 +1,939 @@
+import { LineEdit, Palette, Switch, ScrollView } from "std-widgets.slint";
+
+export struct ResetCreditView {
+    id: string,
+    title: string,
+    expiry: string,
+}
+
+export struct AccountView {
+    id: string,
+    provider-id: string,
+    display-name: string,
+    color-name: string,
+    email: string,
+    masked-email: string,
+    accent: color,
+    show-accent: bool,
+    enabled: bool,
+    pin-short: bool,
+    expanded: bool,
+    email-revealed: bool,
+    confirm-credit-id: string,
+    has-usage: bool,
+    has-error: bool,
+    error-text: string,
+    long-label: string,
+    long-remaining: float,
+    long-percent-text: string,
+    has-long-reset-time: bool,
+    long-reset-text: string,
+    has-short-limit: bool,
+    short-label: string,
+    short-remaining: float,
+    short-percent-text: string,
+    has-short-reset-time: bool,
+    short-reset-text: string,
+    has-reset-credits: bool,
+    reset-count-text: string,
+    reset-credits: [ResetCreditView],
+    has-hidden-details: bool,
+    detail-height-px: float,
+    row-height-px: float,
+}
+
+export struct ColorChoice {
+    name: string,
+    value: color,
+}
+
+component AccentDot inherits Rectangle {
+    in property <color> accent;
+    background: root.accent;
+    border-color: Palette.border;
+    border-width: 1px;
+    border-radius: root.width / 2;
+}
+
+component ProviderMark inherits Rectangle {
+    in property <string> provider-id: "openai";
+    in property <color> accent;
+    in property <bool> show-accent: true;
+    width: 27px;
+    height: 22px;
+    background: transparent;
+
+    Image {
+        x: 1px;
+        y: 2px;
+        width: 18px;
+        height: 18px;
+        source: root.provider-id == "anthropic"
+            ? @image-url("../assets/providers/anthropic.svg")
+            : root.provider-id == "google"
+            ? @image-url("../assets/providers/google.svg")
+            : root.provider-id == "xai"
+            ? @image-url("../assets/providers/xai.svg")
+            : root.provider-id == "opencode"
+            ? @image-url("../assets/providers/opencode.svg")
+            : @image-url("../assets/providers/openai.svg");
+        colorize: white;
+        image-fit: contain;
+    }
+
+    if root.show-accent: AccentDot {
+        x: 19px;
+        y: 14px;
+        width: 8px;
+        height: 8px;
+        accent: root.accent;
+    }
+}
+
+component HeaderIconButton inherits Rectangle {
+    in property <image> icon;
+    in property <string> label;
+    in property <length> icon-size: 18px;
+    in property <bool> active: true;
+    callback clicked();
+    width: 30px;
+    height: 30px;
+    background: root.active && area.has-hover ? Palette.alternate-background : transparent;
+    border-radius: 6px;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-action-default => { if (root.active) { root.clicked(); } }
+    opacity: root.active ? 1 : 0.36;
+
+    Image {
+        width: root.icon-size;
+        height: root.icon-size;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        source: root.icon;
+        colorize: Palette.foreground;
+        image-fit: contain;
+    }
+    area := TouchArea {
+        clicked => { if (root.active) { root.clicked(); } }
+    }
+}
+
+component UsageBar inherits Rectangle {
+    in property <float> remaining: 0;
+    in property <color> fill-color;
+    in property <string> accessible-name;
+    in property <string> accessible-value-text;
+    height: 5px;
+    accessible-role: progress-indicator;
+    accessible-label: root.accessible-name;
+    accessible-value: root.accessible-value-text;
+    accessible-value-minimum: 0;
+    accessible-value-maximum: 100;
+    border-radius: 2.5px;
+    background: Palette.alternate-background;
+    border-width: 1px;
+    border-color: Palette.border;
+
+    Rectangle {
+        x: 1px;
+        y: 1px;
+        width: max(0px, (parent.width - 2px) * min(1, max(0, root.remaining)));
+        height: parent.height - 2px;
+        border-radius: 1.5px;
+        background: root.fill-color;
+    }
+}
+
+component LimitLine inherits Rectangle {
+    in property <string> label;
+    in property <float> remaining;
+    in property <string> percent-text;
+    in property <color> accent;
+    in property <string> reset-text: "";
+    in property <bool> show-reset-text: false;
+    height: 18px;
+    background: transparent;
+
+    HorizontalLayout {
+        width: parent.width;
+        height: parent.height;
+        spacing: 5px;
+        Text {
+            text: root.show-reset-text
+                ? root.label + " • resets in " + root.reset-text
+                : root.label;
+            color: Palette.foreground;
+            font-size: 10px;
+            opacity: 0.70;
+            vertical-alignment: center;
+        }
+        Rectangle {
+            height: 18px;
+            horizontal-stretch: 1;
+            background: transparent;
+            UsageBar {
+                y: 6.5px;
+                width: parent.width;
+                remaining: root.remaining;
+                fill-color: root.accent;
+                accessible-name: root.label + " remaining usage";
+                accessible-value-text: root.percent-text + " remaining";
+            }
+        }
+        Text {
+            width: 34px;
+            text: root.percent-text;
+            color: Palette.foreground;
+            font-size: 10.5px;
+            font-weight: 600;
+            horizontal-alignment: right;
+            vertical-alignment: center;
+        }
+    }
+}
+
+component Chevron inherits Rectangle {
+    in property <bool> expanded: false;
+    in property <bool> motion-enabled: true;
+    width: 24px;
+    height: 24px;
+    background: transparent;
+    Image {
+        width: 16px;
+        height: 16px;
+        x: 4px;
+        y: 4px;
+        source: @image-url("../assets/icons/chevron-down.svg");
+        colorize: Palette.foreground;
+        image-fit: contain;
+        transform-rotation: root.expanded ? 180deg : 0deg;
+        animate transform-rotation {
+            duration: 140ms;
+            easing: ease-out;
+            enabled: root.motion-enabled;
+        }
+    }
+}
+
+component TinyAction inherits Rectangle {
+    in property <string> text;
+    in property <bool> emphasized: false;
+    in property <bool> active: true;
+    callback clicked();
+    height: 22px;
+    background: root.emphasized
+        ? #4f75ff
+        : (root.active && area.has-hover ? Palette.alternate-background : transparent);
+    border-width: root.emphasized ? 0px : 1px;
+    border-color: Palette.border;
+    border-radius: 5px;
+    opacity: root.active ? 1 : 0.4;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-action-default => { if (root.active) { root.clicked(); } }
+    Text {
+        text: root.text;
+        color: root.emphasized ? white : Palette.foreground;
+        font-size: 9.5px;
+        font-weight: root.emphasized ? 600 : 400;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    area := TouchArea {
+        clicked => { if (root.active) { root.clicked(); } }
+    }
+}
+
+component DetailLine inherits HorizontalLayout {
+    in property <string> label;
+    in property <string> value;
+    height: 18px;
+    spacing: 8px;
+    Text {
+        text: root.label;
+        color: Palette.foreground;
+        font-size: 9.5px;
+        opacity: 0.58;
+        horizontal-stretch: 1;
+        vertical-alignment: center;
+    }
+    Text {
+        text: root.value;
+        color: Palette.foreground;
+        font-size: 9.5px;
+        opacity: 0.84;
+        vertical-alignment: center;
+        horizontal-alignment: right;
+    }
+}
+
+component ResetCreditRow inherits Rectangle {
+    in property <ResetCreditView> credit;
+    in property <bool> confirming: false;
+    in property <bool> busy: false;
+    callback use-clicked();
+    callback cancel-clicked();
+    callback confirmed();
+    height: 30px;
+    background: transparent;
+
+    Rectangle {
+        x: 0px;
+        y: 0px;
+        width: root.confirming ? parent.width - 204px : parent.width - 50px;
+        height: parent.height;
+        background: transparent;
+        Text {
+            x: 0px;
+            y: 1px;
+            width: parent.width;
+            height: 14px;
+            text: root.credit.title;
+            color: Palette.foreground;
+            font-size: 9.5px;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        Text {
+            x: 0px;
+            y: 14px;
+            width: parent.width;
+            height: 14px;
+            text: root.credit.expiry;
+            color: Palette.foreground;
+            font-size: 8.5px;
+            opacity: 0.56;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+
+    if !root.confirming: TinyAction {
+        x: parent.width - 42px;
+        y: 4px;
+        width: 42px;
+        text: "Use";
+        active: !root.busy;
+        clicked => { root.use-clicked(); }
+    }
+    if root.confirming: Text {
+        x: parent.width - 198px;
+        y: 0px;
+        width: 88px;
+        height: parent.height;
+        text: "Confirm reset use?";
+        color: Palette.foreground;
+        font-size: 8.7px;
+        opacity: 0.82;
+        horizontal-alignment: right;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    if root.confirming: TinyAction {
+        x: parent.width - 106px;
+        y: 4px;
+        width: 44px;
+        text: "Cancel";
+        active: !root.busy;
+        clicked => { root.cancel-clicked(); }
+    }
+    if root.confirming: TinyAction {
+        x: parent.width - 58px;
+        y: 4px;
+        width: 58px;
+        text: "Use reset";
+        emphasized: true;
+        active: !root.busy;
+        clicked => { root.confirmed(); }
+    }
+}
+
+component AccountRow inherits Rectangle {
+    in property <AccountView> account;
+    in property <bool> blur-emails: false;
+    in property <bool> motion-enabled: true;
+    in property <bool> reset-busy: false;
+    callback toggle-details(string);
+    callback toggle-email(string);
+    callback arm-reset(string, string);
+    callback cancel-reset(string);
+    callback confirm-reset(string, string);
+
+    visible: root.account.enabled;
+    height: root.account.enabled ? root.account.row-height-px * 1px : 0px;
+    background: transparent;
+
+    VerticalLayout {
+        width: parent.width;
+        height: parent.height - 1px;
+        padding-top: 5px;
+        padding-bottom: 6px;
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: 2px;
+
+        HorizontalLayout {
+            height: 22px;
+            spacing: 7px;
+            ProviderMark {
+                provider-id: root.account.provider-id;
+                accent: root.account.accent;
+                show-accent: root.account.show-accent;
+            }
+            Text {
+                text: root.account.display-name;
+                color: Palette.foreground;
+                font-size: 12px;
+                font-weight: 600;
+                vertical-alignment: center;
+            }
+            Rectangle {
+                horizontal-stretch: 1;
+                height: 22px;
+                background: transparent;
+                accessible-role: button;
+                accessible-label: root.blur-emails && !root.account.email-revealed
+                    ? "Reveal account email"
+                    : root.account.email;
+                Text {
+                    width: parent.width;
+                    height: parent.height;
+                    text: root.blur-emails && !root.account.email-revealed
+                        ? root.account.masked-email
+                        : root.account.email;
+                    color: Palette.foreground;
+                    font-size: 9.5px;
+                    opacity: root.blur-emails && !root.account.email-revealed ? 0.48 : 0.56;
+                    overflow: elide;
+                    horizontal-alignment: right;
+                    vertical-alignment: center;
+                }
+                TouchArea {
+                    clicked => { if (root.blur-emails) { root.toggle-email(root.account.id); } }
+                }
+            }
+            if root.account.has-hidden-details: Rectangle {
+                width: 26px;
+                height: 26px;
+                background: area.has-hover ? Palette.alternate-background : transparent;
+                border-radius: 5px;
+                accessible-role: button;
+                accessible-label: root.account.expanded ? "Hide account details" : "Show account details";
+                accessible-expandable: true;
+                accessible-expanded: root.account.expanded;
+                accessible-action-default => { root.toggle-details(root.account.id); }
+                Chevron {
+                    x: 1px;
+                    y: 1px;
+                    expanded: root.account.expanded;
+                    motion-enabled: root.motion-enabled;
+                }
+                area := TouchArea { clicked => { root.toggle-details(root.account.id); } }
+            }
+        }
+
+        if root.account.has-usage: LimitLine {
+            label: root.account.long-label;
+            remaining: root.account.long-remaining;
+            percent-text: root.account.long-percent-text;
+            accent: root.account.accent;
+            reset-text: root.account.long-reset-text;
+            show-reset-text: root.account.expanded && root.account.has-long-reset-time;
+        }
+        if !root.account.has-usage: Text {
+            height: 18px;
+            text: root.account.error-text == "" ? "Usage unavailable" : root.account.error-text;
+            color: Palette.foreground;
+            font-size: 9.5px;
+            opacity: 0.55;
+            vertical-alignment: center;
+        }
+        if root.account.has-usage && root.account.has-error: Text {
+            height: 18px;
+            text: root.account.error-text;
+            color: Palette.foreground;
+            font-size: 9.5px;
+            opacity: 0.62;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+
+        if root.account.pin-short && root.account.has-short-limit: LimitLine {
+            label: root.account.short-label;
+            remaining: root.account.short-remaining;
+            percent-text: root.account.short-percent-text;
+            accent: root.account.accent;
+            reset-text: root.account.short-reset-text;
+            show-reset-text: root.account.expanded && root.account.has-short-reset-time;
+        }
+
+        Rectangle {
+            height: root.account.expanded ? root.account.detail-height-px * 1px : 0px;
+            background: transparent;
+            clip: true;
+            VerticalLayout {
+                width: parent.width;
+                padding-bottom: root.account.reset-credits.length > 0 ? 9px : 5px;
+                spacing: 1px;
+
+                if !root.account.pin-short && root.account.has-short-limit: LimitLine {
+                    label: root.account.short-label;
+                    remaining: root.account.short-remaining;
+                    percent-text: root.account.short-percent-text;
+                    accent: root.account.accent;
+                    reset-text: root.account.short-reset-text;
+                    show-reset-text: root.account.has-short-reset-time;
+                }
+
+                if root.account.has-reset-credits: DetailLine {
+                    label: "Reset credits";
+                    value: root.account.reset-count-text;
+                }
+
+                if root.account.reset-credits.length > 0: Rectangle {
+                    height: 3px;
+                    background: transparent;
+                }
+
+                for credit in root.account.reset-credits: ResetCreditRow {
+                    credit: credit;
+                    confirming: root.account.confirm-credit-id == credit.id;
+                    busy: root.reset-busy;
+                    use-clicked => { root.arm-reset(root.account.id, credit.id); }
+                    cancel-clicked => { root.cancel-reset(root.account.id); }
+                    confirmed => { root.confirm-reset(root.account.id, credit.id); }
+                }
+            }
+        }
+    }
+
+    Rectangle {
+        x: 10px;
+        y: parent.height - 1px;
+        width: parent.width - 20px;
+        height: 1px;
+        background: Palette.border;
+        opacity: 0.55;
+    }
+}
+
+component SettingRow inherits Rectangle {
+    in property <string> title;
+    in property <string> subtitle;
+    in property <bool> checked: false;
+    callback changed(bool);
+    height: 45px;
+    background: transparent;
+    HorizontalLayout {
+        width: parent.width;
+        height: parent.height;
+        spacing: 8px;
+        VerticalLayout {
+            vertical-stretch: 1;
+            spacing: 0px;
+            Text {
+                text: root.title;
+                color: Palette.foreground;
+                font-size: 11px;
+                vertical-alignment: bottom;
+            }
+            Text {
+                text: root.subtitle;
+                color: Palette.foreground;
+                font-size: 8.5px;
+                opacity: 0.55;
+                vertical-alignment: top;
+            }
+        }
+        Switch {
+            width: 38px;
+            checked: root.checked;
+            toggled => { root.changed(self.checked); }
+        }
+    }
+}
+
+component ColorChoiceButton inherits Rectangle {
+    in property <ColorChoice> choice;
+    in property <bool> selected: false;
+    callback clicked(string);
+    width: 20px;
+    height: 24px;
+    background: transparent;
+    accessible-role: button;
+    accessible-label: "Use " + root.choice.name + " account color";
+    accessible-checked: root.selected;
+    accessible-action-default => { root.clicked(root.choice.name); }
+
+    Rectangle {
+        x: 2px;
+        y: 4px;
+        width: 16px;
+        height: 16px;
+        border-radius: 8px;
+        background: root.choice.value;
+        border-width: root.selected ? 3px : 1px;
+        border-color: root.selected ? Palette.foreground : Palette.border;
+    }
+    TouchArea { clicked => { root.clicked(root.choice.name); } }
+}
+
+component AccountSettings inherits Rectangle {
+    in property <AccountView> account;
+    in property <[ColorChoice]> colors;
+    in property <bool> can-move-up: false;
+    in property <bool> can-move-down: false;
+    callback name-changed(string, string);
+    callback color-changed(string, string);
+    callback enabled-changed(string, bool);
+    callback pin-short-changed(string, bool);
+    callback move-requested(string, int);
+    height: root.account.has-short-limit ? 167px : 122px;
+    background: transparent;
+
+    VerticalLayout {
+        width: parent.width;
+        height: parent.height;
+        spacing: 0px;
+
+        Rectangle {
+            height: 46px;
+            background: transparent;
+            Text {
+                x: 0px;
+                y: 4px;
+                width: parent.width - 122px;
+                height: 20px;
+                text: root.account.display-name;
+                color: Palette.foreground;
+                font-size: 11px;
+                font-weight: 600;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            Text {
+                x: 0px;
+                y: 23px;
+                width: parent.width - 122px;
+                height: 16px;
+                text: root.account.email == "" ? root.account.id : root.account.email;
+                color: Palette.foreground;
+                font-size: 8.5px;
+                opacity: 0.55;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            TinyAction {
+                x: parent.width - 116px;
+                y: 12px;
+                width: 25px;
+                text: "↑";
+                active: root.can-move-up;
+                clicked => { root.move-requested(root.account.id, -1); }
+            }
+            TinyAction {
+                x: parent.width - 87px;
+                y: 12px;
+                width: 25px;
+                text: "↓";
+                active: root.can-move-down;
+                clicked => { root.move-requested(root.account.id, 1); }
+            }
+            Switch {
+                x: parent.width - 42px;
+                y: 7px;
+                width: 38px;
+                checked: root.account.enabled;
+                toggled => { root.enabled-changed(root.account.id, self.checked); }
+            }
+        }
+        HorizontalLayout {
+            height: 40px;
+            padding-top: 4px;
+            padding-bottom: 4px;
+            spacing: 8px;
+            Text {
+                width: 48px;
+                text: "Name";
+                color: Palette.foreground;
+                font-size: 10px;
+                vertical-alignment: center;
+            }
+            Rectangle {
+                width: 205px;
+                height: 32px;
+                background: transparent;
+                LineEdit {
+                    width: parent.width;
+                    height: parent.height;
+                    text: root.account.display-name;
+                    placeholder-text: "Account name";
+                    edited(value) => { root.name-changed(root.account.id, value); }
+                }
+            }
+            Rectangle { horizontal-stretch: 1; background: transparent; }
+        }
+        HorizontalLayout {
+            height: 36px;
+            padding-top: 6px;
+            padding-bottom: 6px;
+            spacing: 2px;
+            Text {
+                width: 48px;
+                text: "Color";
+                color: Palette.foreground;
+                font-size: 10px;
+                vertical-alignment: center;
+            }
+            for choice in root.colors: ColorChoiceButton {
+                choice: choice;
+                selected: root.account.color-name == choice.name;
+                clicked(name) => { root.color-changed(root.account.id, name); }
+            }
+        }
+        if root.account.has-short-limit: SettingRow {
+            title: "Show " + root.account.short-label;
+            subtitle: "Keep this window below the main usage bar";
+            checked: root.account.pin-short;
+            changed(value) => { root.pin-short-changed(root.account.id, value); }
+        }
+    }
+}
+
+export component MainWindow inherits Window {
+    title: "Agents Usage";
+    width: 360px;
+    height: root.desired-height-px * 1px;
+    no-frame: true;
+    always-on-top: true;
+    background: transparent;
+
+    in property <[AccountView]> accounts;
+    in-out property <bool> settings-visible: false;
+    in-out property <bool> blur-emails: false;
+    in-out property <bool> pin-short-global: false;
+    in-out property <bool> motion-enabled: true;
+    in-out property <bool> refreshing: false;
+    in-out property <bool> reset-busy: false;
+    in-out property <float> desired-height-px: 180;
+    in-out property <float> dashboard-height-px: 180;
+    in-out property <float> settings-height-px: 180;
+    in property <string> accounts-summary: "";
+    in property <string> empty-text: "Looking for accounts…";
+    in property <int> enabled-account-count: 0;
+
+    callback refresh-requested();
+    callback settings-requested();
+    callback back-to-dashboard();
+    callback account-toggle-details(string);
+    callback account-toggle-email(string);
+    callback account-arm-reset(string, string);
+    callback account-cancel-reset(string);
+    callback account-confirm-reset(string, string);
+    callback blur-emails-changed(bool);
+    callback pin-short-global-changed(bool);
+    callback account-enabled-changed(string, bool);
+    callback account-pin-short-changed(string, bool);
+    callback account-name-changed(string, string);
+    callback account-color-changed(string, string);
+    callback account-move-requested(string, int);
+
+    private property <[ColorChoice]> account-colors: [
+        { name: "cyan", value: #27bfce },
+        { name: "purple", value: #8c6dd8 },
+        { name: "blue", value: #3b82f6 },
+        { name: "green", value: #22c55e },
+        { name: "orange", value: #f97316 },
+        { name: "pink", value: #ec4899 },
+        { name: "yellow", value: #eab308 },
+        { name: "red", value: #ef4444 },
+        { name: "gray", value: #9ca3af },
+        { name: "white", value: #f5f5f5 },
+        { name: "black", value: #141414 },
+    ];
+
+    Rectangle {
+        x: 1px;
+        y: 1px;
+        width: parent.width - 2px;
+        height: parent.height - 2px;
+        border-radius: 10px;
+        border-width: 1px;
+        border-color: Palette.border;
+        background: Palette.background;
+        clip: true;
+
+        if !root.settings-visible: VerticalLayout {
+            width: parent.width;
+            height: parent.height;
+            spacing: 0px;
+
+            Rectangle {
+                height: 40px;
+                background: transparent;
+                Image {
+                    x: 12px;
+                    y: 11px;
+                    width: 18px;
+                    height: 18px;
+                    source: @image-url("../assets/icons/bot.svg");
+                    colorize: Palette.foreground;
+                    image-fit: contain;
+                }
+                Text {
+                    x: 38px;
+                    y: 0px;
+                    width: parent.width - 112px;
+                    height: 40px;
+                    text: "Agents usage";
+                    color: Palette.foreground;
+                    font-size: 12.5px;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                HeaderIconButton {
+                    x: parent.width - 68px;
+                    y: 5px;
+                    icon: @image-url("../assets/icons/settings-2.svg");
+                    icon-size: 18px;
+                    label: "Settings";
+                    clicked => { root.settings-requested(); }
+                }
+                HeaderIconButton {
+                    x: parent.width - 34px;
+                    y: 5px;
+                    icon: @image-url("../assets/icons/refresh-cw.svg");
+                    icon-size: 18px;
+                    label: root.refreshing ? "Refreshing" : "Refresh";
+                    active: !root.refreshing;
+                    clicked => { root.refresh-requested(); }
+                }
+            }
+            Rectangle { height: 1px; background: Palette.border; opacity: 0.55; }
+
+            if root.enabled-account-count == 0: Text {
+                horizontal-stretch: 1;
+                vertical-stretch: 1;
+                text: root.empty-text;
+                color: Palette.foreground;
+                font-size: 10px;
+                opacity: 0.55;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                wrap: word-wrap;
+            }
+
+            if root.enabled-account-count > 0: VerticalLayout {
+                horizontal-stretch: 1;
+                vertical-stretch: 1;
+                padding-bottom: 17px;
+                spacing: 0px;
+                for account in root.accounts: AccountRow {
+                    account: account;
+                    blur-emails: root.blur-emails;
+                    motion-enabled: root.motion-enabled;
+                    reset-busy: root.reset-busy;
+                    toggle-details(id) => { root.account-toggle-details(id); }
+                    toggle-email(id) => { root.account-toggle-email(id); }
+                    arm-reset(id, credit) => { root.account-arm-reset(id, credit); }
+                    cancel-reset(id) => { root.account-cancel-reset(id); }
+                    confirm-reset(id, credit) => { root.account-confirm-reset(id, credit); }
+                }
+            }
+        }
+
+        if root.settings-visible: VerticalLayout {
+            width: parent.width;
+            height: parent.height;
+            spacing: 0px;
+            Rectangle {
+                height: 40px;
+                background: transparent;
+                HeaderIconButton {
+                    x: 7px;
+                    y: 5px;
+                    icon: @image-url("../assets/icons/chevron-left.svg");
+                    icon-size: 18px;
+                    label: "Back to usage";
+                    clicked => {
+                        root.settings-visible = false;
+                        root.back-to-dashboard();
+                    }
+                }
+                Text {
+                    x: 43px;
+                    y: 0px;
+                    width: parent.width - 53px;
+                    height: 40px;
+                    text: "Settings";
+                    color: Palette.foreground;
+                    font-size: 12.5px;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                }
+            }
+            Rectangle { height: 1px; background: Palette.border; opacity: 0.55; }
+
+            settings-scroll := ScrollView {
+                horizontal-stretch: 1;
+                vertical-stretch: 1;
+                horizontal-scrollbar-policy: always-off;
+                vertical-scrollbar-policy: as-needed;
+                mouse-drag-pan-enabled: false;
+
+                VerticalLayout {
+                    width: parent.width;
+                    padding-left: 10px;
+                    padding-right: 14px;
+                    padding-bottom: 10px;
+                    spacing: 0px;
+
+                        SettingRow {
+                            title: "Blur account emails";
+                            subtitle: "When enabled, click an email to reveal it";
+                            checked: root.blur-emails;
+                            changed(value) => { root.blur-emails-changed(value); }
+                        }
+                        SettingRow {
+                            title: "Always show 5-hour limits";
+                            subtitle: "Show available short windows below weekly usage";
+                            checked: root.pin-short-global;
+                            changed(value) => { root.pin-short-global-changed(value); }
+                        }
+                        Text {
+                            height: 22px;
+                            text: "Accounts";
+                            color: Palette.foreground;
+                            font-size: 9px;
+                            font-weight: 600;
+                            opacity: 0.58;
+                            vertical-alignment: bottom;
+                        }
+
+                        for account[index] in root.accounts: AccountSettings {
+                            account: account;
+                            colors: root.account-colors;
+                            can-move-up: index > 0;
+                            can-move-down: index + 1 < root.accounts.length;
+                            name-changed(id, value) => { root.account-name-changed(id, value); }
+                            color-changed(id, value) => { root.account-color-changed(id, value); }
+                            enabled-changed(id, value) => { root.account-enabled-changed(id, value); }
+                            pin-short-changed(id, value) => { root.account-pin-short-changed(id, value); }
+                            move-requested(id, direction) => { root.account-move-requested(id, direction); }
+                        }
+
+                        Text {
+                            height: 28px;
+                            text: root.accounts-summary;
+                            color: Palette.foreground;
+                            font-size: 8.5px;
+                            opacity: 0.48;
+                            vertical-alignment: center;
+                        }
+                }
+            }
+        }
+    }
+}

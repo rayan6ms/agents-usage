@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Agents Usage
+Comment=View coding-agent account usage
+Exec="@EXEC@" --open
+Icon=agents-usage
+Terminal=false
+Categories=Utility;
+StartupNotify=false
+Keywords=AI;Agents;Usage;Codex;OpenAI;

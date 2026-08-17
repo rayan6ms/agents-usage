@@ -1,0 +1,5 @@
+[target.'cfg(all(target_os = "linux", target_env = "gnu"))']
+rustflags = [
+    "-C", "link-arg=-Wl,--icf=all",
+    "-C", "link-arg=-Wl,-z,pack-relative-relocs",
+]

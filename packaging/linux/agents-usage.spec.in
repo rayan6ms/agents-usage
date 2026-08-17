@@ -1,0 +1,31 @@
+Name:           agents-usage
+Version:        @VERSION@
+Release:        1
+Summary:        Lightweight tray utility for coding-agent account usage
+License:        GPL-3.0-only
+BuildArch:      @RPM_ARCH@
+AutoReqProv:    yes
+
+%description
+Agents Usage is a compact GNOME/KDE tray utility for viewing usage across
+local coding-agent accounts through the installed Codex App Server.
+
+%prep
+
+%build
+
+%install
+mkdir -p %{buildroot}
+cp -a %{_stage}/. %{buildroot}/
+
+%files
+%{_bindir}/agents-usage
+%{_datadir}/applications/io.github.agentsusagetray.AgentsUsage.desktop
+%{_datadir}/icons/hicolor/scalable/apps/agents-usage.svg
+%{_datadir}/metainfo/io.github.agentsusagetray.AgentsUsage.metainfo.xml
+%{_datadir}/gnome-shell/extensions/agents-usage@local/
+%doc %{_defaultdocdir}/agents-usage/
+
+%changelog
+* Sun Aug 16 2026 Agents Usage maintainers <local@agents-usage.invalid> - @VERSION@-1
+- Fix launcher activation, popup sizing, refresh edge cases, and add KDE tray support.

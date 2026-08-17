@@ -1,0 +1,5 @@
+/target/
+/dist/
+/.packaging-cache/
+*.log
+.DS_Store

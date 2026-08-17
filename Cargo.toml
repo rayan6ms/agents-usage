@@ -1,0 +1,56 @@
+[package]
+name = "agents-usage"
+version = "0.2.2"
+edition = "2024"
+rust-version = "1.92"
+publish = false
+description = "Lightweight tray utility for coding-agent account usage"
+license = "GPL-3.0-only"
+repository = "https://github.com/rayan6ms/agents-usage"
+
+[dependencies]
+slint = { version = "=1.17.1", default-features = false, features = [
+    "std",
+    "compat-1-2",
+    "backend-winit-x11",
+    "renderer-femtovg",
+    "accessibility",
+    "unstable-winit-030",
+] }
+tokio = { version = "1.53", default-features = false, features = [
+    "rt",
+    "sync",
+    "time",
+    "macros",
+    "process",
+    "io-util",
+] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.9"
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+thiserror = "2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ksni = "0.3.6"
+raw-window-handle = "0.6"
+x11rb = "0.13.2"
+zbus = { version = "5", default-features = false, features = ["tokio"] }
+
+[target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
+tray-icon = "0.24.1"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
+
+[build-dependencies]
+slint-build = "=1.17.1"
+
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"
+incremental = false
