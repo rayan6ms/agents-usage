@@ -232,7 +232,7 @@ pub fn is_account_color(name: &str) -> bool {
 }
 
 pub const ACCOUNT_COLORS: [&str; 11] = [
-    "cyan", "purple", "blue", "green", "orange", "pink", "yellow", "red", "gray", "white", "black",
+    "red", "orange", "yellow", "green", "cyan", "blue", "purple", "pink", "white", "gray", "black",
 ];
 
 #[cfg(test)]

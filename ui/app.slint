@@ -1,4 +1,4 @@
-import { LineEdit, Palette, Switch, ScrollView } from "std-widgets.slint";
+import { LineEdit, Palette, ScrollView } from "std-widgets.slint";
 
 export struct ResetCreditView {
     id: string,
@@ -53,6 +53,83 @@ component AccentDot inherits Rectangle {
     border-color: Palette.border;
     border-width: 1px;
     border-radius: root.width / 2;
+}
+
+component AppSwitch inherits Rectangle {
+    in property <string> label;
+    in property <bool> enabled: true;
+    in-out property <bool> checked;
+    callback toggled();
+    width: 38px;
+    height: 22px;
+    background: transparent;
+    forward-focus: focus-scope;
+    accessible-role: switch;
+    accessible-label: root.label;
+    accessible-enabled: root.enabled;
+    accessible-checkable: true;
+    accessible-checked <=> root.checked;
+    accessible-action-default => { root.toggle(); }
+
+    function toggle() {
+        if root.enabled {
+            root.checked = !root.checked;
+            root.toggled();
+        }
+    }
+
+    rail := Rectangle {
+        x: 0px;
+        y: 1px;
+        width: parent.width;
+        height: 20px;
+        border-radius: 10px;
+        border-width: root.checked ? 0px : 1px;
+        border-color: Palette.border;
+        background: root.checked ? Palette.foreground : Palette.alternate-background;
+        opacity: root.enabled ? (area.has-hover ? 0.82 : 1) : 0.4;
+    }
+
+    thumb := Rectangle {
+        x: root.checked ? parent.width - self.width - 4px : 4px;
+        y: 5px;
+        width: 12px;
+        height: 12px;
+        border-radius: 6px;
+        background: root.checked ? Palette.background : Palette.foreground;
+        opacity: root.enabled ? 1 : 0.5;
+        animate x { duration: 120ms; easing: ease-out; }
+    }
+
+    if focus-scope.has-focus: Rectangle {
+        x: -2px;
+        y: -2px;
+        width: parent.width + 4px;
+        height: parent.height + 4px;
+        border-radius: 13px;
+        border-width: 1px;
+        border-color: Palette.foreground;
+        background: transparent;
+        opacity: 0.55;
+    }
+
+    area := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.toggle(); }
+    }
+
+    focus-scope := FocusScope {
+        x: 0px;
+        width: 0px;
+        enabled: root.enabled;
+        key-pressed(event) => {
+            if event.text == " " || event.text == "\n" {
+                root.toggle();
+                return accept;
+            }
+            return reject;
+        }
+    }
 }
 
 component ProviderMark inherits Rectangle {
@@ -546,8 +623,9 @@ component SettingRow inherits Rectangle {
                 vertical-alignment: top;
             }
         }
-        Switch {
+        AppSwitch {
             width: 38px;
+            label: root.title;
             checked: root.checked;
             toggled => { root.changed(self.checked); }
         }
@@ -640,10 +718,11 @@ component AccountSettings inherits Rectangle {
                 active: root.can-move-down;
                 clicked => { root.move-requested(root.account.id, 1); }
             }
-            Switch {
+            AppSwitch {
                 x: parent.width - 42px;
                 y: 7px;
                 width: 38px;
+                label: "Enable " + root.account.display-name;
                 checked: root.account.enabled;
                 toggled => { root.enabled-changed(root.account.id, self.checked); }
             }
@@ -661,12 +740,13 @@ component AccountSettings inherits Rectangle {
                 vertical-alignment: center;
             }
             Rectangle {
-                width: 205px;
+                width: 160px;
                 height: 32px;
                 background: transparent;
                 LineEdit {
+                    y: 2px;
                     width: parent.width;
-                    height: parent.height;
+                    height: 28px;
                     text: root.account.display-name;
                     placeholder-text: "Account name";
                     edited(value) => { root.name-changed(root.account.id, value); }
@@ -740,16 +820,16 @@ export component MainWindow inherits Window {
     callback account-move-requested(string, int);
 
     private property <[ColorChoice]> account-colors: [
-        { name: "cyan", value: #27bfce },
-        { name: "purple", value: #8c6dd8 },
-        { name: "blue", value: #3b82f6 },
-        { name: "green", value: #22c55e },
-        { name: "orange", value: #f97316 },
-        { name: "pink", value: #ec4899 },
-        { name: "yellow", value: #eab308 },
         { name: "red", value: #ef4444 },
-        { name: "gray", value: #9ca3af },
+        { name: "orange", value: #f97316 },
+        { name: "yellow", value: #eab308 },
+        { name: "green", value: #22c55e },
+        { name: "cyan", value: #27bfce },
+        { name: "blue", value: #3b82f6 },
+        { name: "purple", value: #8c6dd8 },
+        { name: "pink", value: #ec4899 },
         { name: "white", value: #f5f5f5 },
+        { name: "gray", value: #9ca3af },
         { name: "black", value: #141414 },
     ];
 

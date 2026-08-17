@@ -27,5 +27,8 @@ cp -a %{_stage}/. %{buildroot}/
 %doc %{_defaultdocdir}/agents-usage/
 
 %changelog
+* Mon Aug 17 2026 Agents Usage maintainers <local@agents-usage.invalid> - @VERSION@-1
+- Improve refresh latency and persist expanded usage details.
+
 * Sun Aug 16 2026 Agents Usage maintainers <local@agents-usage.invalid> - @VERSION@-1
 - Fix launcher activation, popup sizing, refresh edge cases, and add KDE tray support.

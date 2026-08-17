@@ -31,6 +31,9 @@ const PANEL_GAP_PX: i32 = 6;
 const SCREEN_MARGIN_PX: i32 = 5;
 const OPEN_REFRESH_FRESHNESS: Duration = Duration::from_secs(5);
 const STARTUP_REFRESH_DELAY: Duration = Duration::from_secs(10);
+const MAX_RPC_CONCURRENCY: usize = 4;
+const INTERACTIVE_REFRESH_CONCURRENCY: usize = 4;
+const INTERACTIVE_DISCOVERY_CONCURRENCY: usize = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LaunchMode { Background, Open }
@@ -728,9 +731,11 @@ fn record_from_snapshot(
         .filter(|value| !value.is_empty())
         .map(str::to_string)
         .unwrap_or_else(|| source_account_name(&home));
+    let expand_globally = config.pin_short_global;
     let pref = config::preference_for_mut(config, &home);
     if pref.color.is_none() { pref.color = Some(ui_model::ACCOUNT_COLORS[color_index % ui_model::ACCOUNT_COLORS.len()].into()); }
     if pref.display_name.is_none() { pref.display_name = Some(discovered_name.clone()); }
+    if expand_globally { pref.expanded = true; }
     AccountRecord {
         id,
         home,
@@ -739,7 +744,7 @@ fn record_from_snapshot(
         color_name: pref.color.clone().unwrap_or_else(|| "cyan".into()),
         enabled: pref.enabled,
         pin_short: pref.pin_short,
-        expanded: false,
+        expanded: pref.expanded,
         email_revealed: false,
         confirm_credit_id: String::new(),
         snapshot: Some(snapshot),
@@ -747,7 +752,11 @@ fn record_from_snapshot(
     }
 }
 
-fn placeholder_record(pref: &AccountPreference, index: usize) -> Option<AccountRecord> {
+fn placeholder_record(
+    pref: &AccountPreference,
+    index: usize,
+    expand_globally: bool,
+) -> Option<AccountRecord> {
     if !pref.home.is_dir() { return None; }
     Some(AccountRecord {
         id: canonical_id(&pref.home),
@@ -757,7 +766,7 @@ fn placeholder_record(pref: &AccountPreference, index: usize) -> Option<AccountR
         color_name: pref.color.clone().unwrap_or_else(|| ui_model::ACCOUNT_COLORS[index % ui_model::ACCOUNT_COLORS.len()].into()),
         enabled: pref.enabled,
         pin_short: pref.pin_short,
-        expanded: false,
+        expanded: pref.expanded || expand_globally,
         email_revealed: false,
         confirm_credit_id: String::new(),
         snapshot: None,
@@ -850,31 +859,30 @@ async fn refresh_known_accounts(
     let mut jobs = JoinSet::new();
     let operation_semaphore = Arc::new(Semaphore::new(operation_concurrency.max(1)));
     for (id, home) in targets {
-        let permit = rpc_semaphore.clone().acquire_owned().await;
-        let Ok(permit) = permit else { continue; };
-        let operation_permit = operation_semaphore.clone().acquire_owned().await;
-        let Ok(operation_permit) = operation_permit else { continue; };
         let codex_path = codex_path.clone();
+        let rpc_semaphore = rpc_semaphore.clone();
+        let operation_semaphore = operation_semaphore.clone();
         jobs.spawn(async move {
-            let _permit = permit;
-            let _operation_permit = operation_permit;
+            let Ok(_operation_permit) = operation_semaphore.acquire_owned().await else { return None; };
+            let Ok(_permit) = rpc_semaphore.acquire_owned().await else { return None; };
             let result = codex::read_openai_account(&codex_path, &home).await;
-            (id, home, result)
+            Some((id, home, result))
         });
     }
 
     while let Some(result) = jobs.join_next().await {
         match result {
-            Ok((_id, home, Ok(snapshot))) => {
+            Ok(Some((_id, home, Ok(snapshot)))) => {
                 apply_snapshot(home, snapshot, &accounts, &config);
                 schedule_render(ui.clone(), accounts.clone(), config.clone(), last_anchor.clone(), None);
             }
-            Ok((id, _home, Err(error))) => {
+            Ok(Some((id, _home, Err(error)))) => {
                 eprintln!("refresh: {id}: {error}");
                 let user_message = error.user_message().to_string();
                 apply_refresh_error(&id, user_message, &accounts);
                 schedule_render(ui.clone(), accounts.clone(), config.clone(), last_anchor.clone(), None);
             }
+            Ok(None) => {}
             Err(error) => eprintln!("refresh task failed: {error}"),
         }
     }
@@ -908,23 +916,22 @@ async fn discover_new_accounts(
     let mut jobs = JoinSet::new();
     let operation_semaphore = Arc::new(Semaphore::new(operation_concurrency.max(1)));
     for (order, home) in unknown.into_iter().enumerate() {
-        let permit = rpc_semaphore.clone().acquire_owned().await;
-        let Ok(permit) = permit else { continue; };
-        let operation_permit = operation_semaphore.clone().acquire_owned().await;
-        let Ok(operation_permit) = operation_permit else { continue; };
         let codex_path = codex_path.clone();
+        let rpc_semaphore = rpc_semaphore.clone();
+        let operation_semaphore = operation_semaphore.clone();
         jobs.spawn(async move {
-            let _permit = permit;
-            let _operation_permit = operation_permit;
+            let Ok(_operation_permit) = operation_semaphore.acquire_owned().await else { return None; };
+            let Ok(_permit) = rpc_semaphore.acquire_owned().await else { return None; };
             let result = codex::read_openai_account(&codex_path, &home).await;
-            (order, home, result)
+            Some((order, home, result))
         });
     }
 
     let mut completed = Vec::new();
     while let Some(result) = jobs.join_next().await {
         match result {
-            Ok(value) => completed.push(value),
+            Ok(Some(value)) => completed.push(value),
+            Ok(None) => {}
             Err(error) => eprintln!("discovery task failed: {error}"),
         }
     }
@@ -1210,7 +1217,7 @@ fn spawn_worker(
                 let refreshing = Arc::new(AtomicBool::new(false));
                 let refresh_pending = Arc::new(AtomicBool::new(false));
                 let discovering = Arc::new(AtomicBool::new(false));
-                let rpc_semaphore = Arc::new(Semaphore::new(3));
+                let rpc_semaphore = Arc::new(Semaphore::new(MAX_RPC_CONCURRENCY));
                 let last_data_refresh = Arc::new(Mutex::new(None::<Instant>));
 
                 while let Some(command) = rx.recv().await {
@@ -1339,7 +1346,7 @@ fn spawn_worker(
                                 refresh_known_accounts(
                                     codex_path.clone(), accounts2.clone(), config2.clone(), ui2.clone(), anchor2.clone(),
                                     rpc_semaphore2.clone(),
-                                    if startup_pass { 1 } else { 3 },
+                                    if startup_pass { 1 } else { INTERACTIVE_REFRESH_CONCURRENCY },
                                 ).await;
 
                                 // Once known accounts are current, the visible refresh operation is done.
@@ -1354,7 +1361,7 @@ fn spawn_worker(
                                     discover_new_accounts(
                                         codex_path, accounts2, config2, ui2.clone(), anchor2,
                                         rpc_semaphore2,
-                                        if startup_pass { 1 } else { 2 },
+                                        if startup_pass { 1 } else { INTERACTIVE_DISCOVERY_CONCURRENCY },
                                     ).await;
                                     discovering2.store(false, Ordering::SeqCst);
                                 } else {
@@ -1506,11 +1513,12 @@ fn main() -> Result<(), slint::PlatformError> {
     ui.window().on_close_requested(|| CloseRequestResponse::HideWindow);
 
     let loaded_config = config::load();
+    let expand_globally = loaded_config.pin_short_global;
     let initial_records = loaded_config
         .accounts
         .iter()
         .enumerate()
-        .filter_map(|(index, pref)| placeholder_record(pref, index))
+        .filter_map(|(index, pref)| placeholder_record(pref, index, expand_globally))
         .collect::<Vec<_>>();
 
     let accounts = Arc::new(Mutex::new(initial_records));
@@ -1556,12 +1564,22 @@ fn main() -> Result<(), slint::PlatformError> {
         let accounts = accounts.clone();
         let config = config.clone();
         let last_anchor = last_anchor_shared.clone();
+        let tx = tx.clone();
         ui.on_account_toggle_details(move |id| {
-            if let Ok(mut records) = accounts.lock() {
+            let changed = if let Ok(mut records) = accounts.lock() {
                 if let Some(record) = records.iter_mut().find(|record| record.id == id.as_str()) {
                     record.expanded = !record.expanded;
                     if !record.expanded { record.confirm_credit_id.clear(); }
+                    Some((record.home.clone(), record.expanded))
+                } else {
+                    None
                 }
+            } else { None };
+            if let Some((home, expanded)) = changed {
+                if let Ok(mut cfg) = config.lock() {
+                    config::preference_for_mut(&mut cfg, &home).expanded = expanded;
+                }
+                send(&tx, WorkerCommand::PersistSettings);
             }
             if let Some(ui) = ui_weak.upgrade() { render_ui(&ui, &accounts, &config, &last_anchor, None); }
         });
@@ -1633,7 +1651,17 @@ fn main() -> Result<(), slint::PlatformError> {
         let last_anchor = last_anchor_shared.clone();
         let tx = tx.clone();
         ui.on_pin_short_global_changed(move |value| {
-            if let Ok(mut cfg) = config_arc.lock() { cfg.pin_short_global = value; }
+            if value {
+                if let Ok(mut records) = accounts.lock() {
+                    for record in records.iter_mut() { record.expanded = true; }
+                }
+            }
+            if let Ok(mut cfg) = config_arc.lock() {
+                cfg.pin_short_global = value;
+                if value {
+                    for preference in &mut cfg.accounts { preference.expanded = true; }
+                }
+            }
             if let Some(ui) = ui_weak.upgrade() { render_ui(&ui, &accounts, &config_arc, &last_anchor, None); }
             send(&tx, WorkerCommand::PersistSettings);
         });
@@ -1883,13 +1911,33 @@ mod tests {
             ..AppConfig::default()
         };
         let mut records = config.accounts.iter().enumerate()
-            .filter_map(|(index, preference)| placeholder_record(preference, index))
+            .filter_map(|(index, preference)| placeholder_record(preference, index, false))
             .collect::<Vec<_>>();
         let second_id = records[1].id.clone();
 
         assert!(move_account(&mut records, &mut config, &second_id, -1));
         assert_eq!(records[0].home, second);
         assert_eq!(config.accounts[0].home, second);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn placeholder_restores_saved_or_global_expansion() {
+        let root = std::env::temp_dir().join(format!("agents-usage-expanded-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let collapsed = AccountPreference {
+            home: root.clone(),
+            ..AccountPreference::default()
+        };
+        let expanded = AccountPreference {
+            expanded: true,
+            ..collapsed.clone()
+        };
+
+        assert!(!placeholder_record(&collapsed, 0, false).unwrap().expanded);
+        assert!(placeholder_record(&expanded, 0, false).unwrap().expanded);
+        assert!(placeholder_record(&collapsed, 0, true).unwrap().expanded);
 
         fs::remove_dir_all(root).unwrap();
     }

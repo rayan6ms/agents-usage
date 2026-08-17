@@ -46,6 +46,8 @@ pub struct AccountPreference {
     pub enabled: bool,
     #[serde(default)]
     pub pin_short: bool,
+    #[serde(default)]
+    pub expanded: bool,
 }
 
 fn default_true() -> bool { true }
@@ -58,6 +60,7 @@ impl Default for AccountPreference {
             color: None,
             enabled: true,
             pin_short: false,
+            expanded: false,
         }
     }
 }
@@ -245,7 +248,7 @@ fn preserve_invalid_file(path: &Path, label: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::atomic_write;
+    use super::{AccountPreference, atomic_write};
     use std::fs;
 
     #[test]
@@ -257,5 +260,31 @@ mod tests {
         assert_eq!(fs::read(&path).unwrap(), b"second");
         assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn older_account_settings_default_to_collapsed() {
+        let preference: AccountPreference = toml::from_str(
+            r#"
+home = "/tmp/example"
+enabled = true
+pin_short = false
+"#,
+        )
+        .unwrap();
+
+        assert!(!preference.expanded);
+    }
+
+    #[test]
+    fn expanded_account_state_round_trips() {
+        let preference = AccountPreference {
+            expanded: true,
+            ..AccountPreference::default()
+        };
+        let serialized = toml::to_string(&preference).unwrap();
+        let restored: AccountPreference = toml::from_str(&serialized).unwrap();
+
+        assert!(restored.expanded);
     }
 }

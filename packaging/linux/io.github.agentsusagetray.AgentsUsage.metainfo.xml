@@ -12,6 +12,7 @@
     <binary>agents-usage</binary>
   </provides>
   <releases>
+    <release version="0.2.3" date="2026-08-17"/>
     <release version="0.2.2" date="2026-08-16"/>
     <release version="0.2.1" date="2026-08-15"/>
     <release version="0.2.0" date="2026-08-15"/>

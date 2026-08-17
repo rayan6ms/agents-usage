@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.3 — 2026-08-17
+
+- Reduced interactive refresh latency while keeping startup refresh sequential and delayed.
+- Persisted account detail expansion and made the global 5-hour option expand every account.
+- Refined settings sizing, color order, toggle styling, and public documentation.
+
 ## 0.2.2 — 2026-08-17
 
 - Fixed hidden startup, first-open tray placement, fixed-height Settings scrolling, account ordering, stale-data errors, and reset persistence.

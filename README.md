@@ -1,65 +1,39 @@
 # Agents Usage
 
-Agents Usage is a lightweight tray app that shows remaining OpenAI/Codex usage across local accounts. It obtains rate limits through each account's local Codex App Server and never reads or copies authentication tokens.
+Agents Usage is a small desktop tray app for checking the usage remaining on local OpenAI/Codex accounts. It asks each account's installed Codex App Server for current rate limits; it does not read or copy authentication tokens.
 
-## Features
+## Install
 
-- Discovers Codex homes by `auth.json` evidence, not directory names.
-- Preserves account names, colors, order, enabled state, and last valid usage.
-- Coalesces refreshes and limits concurrent Codex processes.
-- Starts hidden and delays its first background refresh by 10 seconds.
-- Provides compact dashboard and scrollable Settings views.
-- Uses GNOME, KDE Plasma, Windows, and macOS tray integrations.
+Download the package for your system from [GitHub Releases](https://github.com/rayan6ms/agents-usage/releases/latest). Codex must be installed, available on `PATH`, and already signed in.
 
-Only OpenAI through Codex currently exposes the safe unattended remaining-quota data the app needs. Other provider logos are assets for possible future adapters; the app does not scrape credentials or display historical spend as remaining quota.
+- **Linux:** use the DEB, RPM, Flatpak, or AppImage. GNOME and KDE Plasma tray integrations are supported.
+- **Windows:** extract the x86-64 ZIP and run `agents-usage.exe`.
+- **macOS:** open the universal DMG or ZIP and launch Agents Usage. Apple Silicon and Intel Macs are supported.
 
-## Install on Linux
+Windows and macOS builds are not production-signed or notarized yet, so the operating system may ask you to confirm that you want to open them.
 
-Install a release package from GitHub, or build and install for the current user:
+## Use
 
-```bash
-./tools/build-release.sh
-./tools/install-user.sh --autostart
-```
+Launch Agents Usage, then click its tray icon to open the usage panel. The app discovers local Codex homes that contain account evidence and validates each candidate through Codex before displaying it.
 
-The installer never logs out, reloads the desktop shell, terminates the app, or enables/disables extensions. A newly installed GNOME extension may become available only after you next log in; enable it manually when convenient.
+Settings let you rename, color, reorder, disable, and expand accounts. Refreshes update accounts independently, preserve the last valid data when one account fails, and check for newly added Codex homes.
 
-Run `./tools/uninstall-user.sh` to remove the app. User settings remain under `~/.config/agents-usage/`.
+## Current limitations
 
-## Build and verify
+- Remaining-quota reporting currently supports OpenAI accounts through Codex only.
+- The app relies on the locally installed Codex App Server and an existing sign-in; it does not perform sign-in or sign-out.
+- Linux tray placement is designed for GNOME and KDE Plasma. Other desktop environments may fall back to their standard StatusNotifier behavior.
+- Windows and macOS packages are built and verified on native GitHub runners, but still need broader real-device testing.
 
-Requirements are Rust 1.92 and a working `codex` executable. Linux package builds additionally require rootless Podman, RPM, Flatpak, AppStream, and desktop-file tools.
+## Build from source
+
+Rust 1.92 or newer is required.
 
 ```bash
 cargo test --locked
-cargo clippy --locked -- -D warnings
-./tools/selftest.py
-./tools/package-linux.sh
+cargo build --release --locked
 ```
-
-Linux output includes RPM, DEB, Flatpak, and AppImage files in `dist/packages/`. GitHub Actions builds an unsigned Windows x86-64 ZIP and an ad-hoc-signed universal macOS ZIP and DMG. Production signing and notarization are not configured.
-
-## Discovery and configuration
-
-Candidates come from `CODEX_HOME`, `AGENTS_USAGE_CODEX_HOMES`, saved paths, configured paths, and direct children of the user home containing `auth.json`. Every new candidate must return valid data through Codex before it is saved.
-
-Configuration locations:
-
-```text
-Linux:   $XDG_CONFIG_HOME/agents-usage/config.toml
-macOS:   ~/Library/Application Support/Agents Usage/config.toml
-Windows: %APPDATA%\Agents Usage\config.toml
-```
-
-## Desktop support
-
-- GNOME uses the bundled Shell extension for exact tray geometry, including Dash-to-Panel.
-- KDE Plasma uses StatusNotifierItem.
-- Windows and macOS use native tray APIs.
-- Popup placement handles top, bottom, left, and right panels and clamps to the active monitor.
-
-Linux packages are locally verified. Windows and macOS are compiled and packaged on native GitHub runners but remain unsigned and should be tested on their target systems.
 
 ## License
 
-Agents Usage is licensed under [GPL-3.0-only](LICENSE). Third-party visual assets and their licenses are listed in [THIRD_PARTY_ASSETS.md](THIRD_PARTY_ASSETS.md).
+Agents Usage is licensed under [GPL-3.0-only](LICENSE). Third-party visual assets are listed in [THIRD_PARTY_ASSETS.md](THIRD_PARTY_ASSETS.md).
