@@ -12,7 +12,7 @@ jobs:
   verify:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: rustup show active-toolchain
       - run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev libxkbcommon-x11-dev
       - run: cargo test --locked
@@ -23,14 +23,14 @@ jobs:
     needs: verify
     runs-on: windows-2025
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: rustup show active-toolchain
       - run: cargo test --locked
       - run: cargo clippy --locked -- -D warnings
       - run: cargo build --release --locked
       - shell: pwsh
         run: ./tools/package-windows.ps1
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: agents-usage-windows-x86_64
           path: dist/packages/*.zip
@@ -40,7 +40,7 @@ jobs:
     needs: verify
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: rustup show active-toolchain
       - run: rustup target add x86_64-apple-darwin
       - run: cargo test --locked
@@ -53,7 +53,7 @@ jobs:
             target/x86_64-apple-darwin/release/agents-usage \
             -output target/universal2/release/agents-usage
       - run: ./tools/package-macos.sh target/universal2/release/agents-usage
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: agents-usage-macos-universal
           path: |
@@ -65,7 +65,7 @@ jobs:
     needs: verify
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: rustup show active-toolchain
       - run: |
           sudo apt-get update
@@ -73,7 +73,7 @@ jobs:
           sudo flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
           sudo flatpak install -y flathub org.freedesktop.Platform//25.08 org.freedesktop.Sdk//25.08
       - run: ./tools/package-linux.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: agents-usage-linux-x86_64
           path: |
@@ -88,7 +88,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: release-assets
           merge-multiple: true
