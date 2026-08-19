@@ -1,14 +1,14 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RateWindow {
     pub used_percent: f32,
     pub duration_mins: Option<u64>,
     pub resets_at: Option<i64>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ResetCredit {
     pub id: Option<String>,
     pub title: Option<String>,
@@ -17,7 +17,7 @@ pub struct ResetCredit {
     pub status: Option<String>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct UsageSnapshot {
     pub email: Option<String>,
     pub bucket_name: Option<String>,
@@ -36,10 +36,17 @@ pub struct AccountRecord {
     pub enabled: bool,
     pub pin_short: bool,
     pub expanded: bool,
+    pub name_revealed: bool,
     pub email_revealed: bool,
     pub confirm_credit_id: String,
     pub snapshot: Option<UsageSnapshot>,
     pub last_error: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CachedUsage {
+    pub home: PathBuf,
+    pub snapshot: UsageSnapshot,
 }
 
 impl AccountRecord {

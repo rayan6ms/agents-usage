@@ -16,7 +16,9 @@ Windows and macOS builds are not production-signed or notarized yet, so the oper
 
 Launch Agents Usage, then click its tray icon to open the usage panel. The app discovers local Codex homes that contain account evidence and validates each candidate through Codex before displaying it.
 
-Settings let you rename, color, reorder, disable, and expand accounts. Refreshes update accounts independently, preserve the last valid data when one account fails, and check for newly added Codex homes.
+Settings let you rename, recolor, reorder, disable, and expand accounts. You can blur account names and emails, choose preset or custom colors, and optionally color reset timers from red toward green as the reset approaches.
+
+Refreshes update accounts independently, preserve the last valid data when one account fails, and check for newly added Codex homes. The last valid usage is also cached locally so the panel has useful data immediately after startup while a fresh check runs.
 
 ## Current limitations
 

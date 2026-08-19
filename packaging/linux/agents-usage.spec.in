@@ -27,6 +27,9 @@ cp -a %{_stage}/. %{buildroot}/
 %doc %{_defaultdocdir}/agents-usage/
 
 %changelog
+* Wed Aug 19 2026 Agents Usage maintainers <local@agents-usage.invalid> - @VERSION@-1
+- Improve refresh responsiveness, restore cached usage, and expand display settings.
+
 * Mon Aug 17 2026 Agents Usage maintainers <local@agents-usage.invalid> - @VERSION@-1
 - Improve refresh latency and persist expanded usage details.
 

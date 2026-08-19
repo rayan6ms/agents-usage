@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.4 — 2026-08-19
+
+- Reduced multi-account refresh latency and restored click-away popup dismissal.
+- Restored the last valid usage snapshot immediately at startup before refreshing it.
+- Added account-name privacy, optional reset-timer colors, and a full custom color picker.
+- Removed white from the preset palette and sharpened the compact OpenAI provider mark.
+
 ## 0.2.3 — 2026-08-17
 
 - Reduced interactive refresh latency while keeping startup refresh sequential and delayed.

@@ -80,7 +80,10 @@ pub fn account_view(record: &AccountRecord, enabled_count: usize, pin_short_glob
         id: record.id.clone().into(),
         provider_id: record.provider_id.clone().into(),
         display_name: record.display_name.clone().into(),
+        masked_display_name: mask_account_name(&record.display_name).into(),
         color_name: record.color_name.clone().into(),
+        custom_color: record.color_name.starts_with('#'),
+        account_color,
         email: record.email().into(),
         masked_email: mask_email(record.email()).into(),
         accent,
@@ -88,6 +91,7 @@ pub fn account_view(record: &AccountRecord, enabled_count: usize, pin_short_glob
         enabled: record.enabled,
         pin_short,
         expanded: record.expanded,
+        name_revealed: record.name_revealed,
         email_revealed: record.email_revealed,
         confirm_credit_id: record.confirm_credit_id.clone().into(),
         has_usage: long.is_some(),
@@ -102,6 +106,7 @@ pub fn account_view(record: &AccountRecord, enabled_count: usize, pin_short_glob
             .map(|value| format_countdown(value, now))
             .unwrap_or_default()
             .into(),
+        long_reset_color: long.map(|window| reset_timer_color(window, now)).unwrap_or_default(),
         has_short_limit: short.is_some(),
         short_label: short_label.into(),
         short_remaining: short.map(remaining_fraction).unwrap_or(0.0),
@@ -112,6 +117,7 @@ pub fn account_view(record: &AccountRecord, enabled_count: usize, pin_short_glob
             .map(|value| format_countdown(value, now))
             .unwrap_or_default()
             .into(),
+        short_reset_color: short.map(|window| reset_timer_color(window, now)).unwrap_or_default(),
         has_reset_credits: reset_count > 0,
         reset_count_text: if reset_count == 1 { "1 available".into() } else { format!("{reset_count} available").into() },
         reset_credits: Rc::new(VecModel::from(credits)).into(),
@@ -187,6 +193,18 @@ fn format_countdown(timestamp: i64, now: i64) -> String {
     }
 }
 
+fn reset_timer_color(window: &RateWindow, now: i64) -> Color {
+    let remaining = window.resets_at.unwrap_or(now).saturating_sub(now).max(0) as f32;
+    let (minimum, maximum) = if window.duration_mins.unwrap_or(10_080) <= 300 {
+        (30.0 * 60.0, 5.0 * 60.0 * 60.0)
+    } else {
+        (12.0 * 60.0 * 60.0, 7.0 * 24.0 * 60.0 * 60.0)
+    };
+    let red_weight = ((remaining - minimum) / (maximum - minimum)).clamp(0.0, 1.0);
+    let hue = 120.0 * (1.0 - red_weight);
+    Color::from_hsva(hue, 0.78, 0.95, 1.0)
+}
+
 fn format_expiry(timestamp: i64, now: i64) -> String {
     let date = Local.timestamp_opt(timestamp, 0).single();
     let date_text = date
@@ -210,7 +228,15 @@ fn mask_email(email: &str) -> String {
     format!("{first}{}@{domain}", "•".repeat(count))
 }
 
+fn mask_account_name(name: &str) -> String {
+    let mut characters = name.chars();
+    let Some(first) = characters.next() else { return String::new(); };
+    let hidden = characters.count().clamp(3, 10);
+    format!("{first}{}", "•".repeat(hidden))
+}
+
 pub fn color_from_name(name: &str) -> Color {
+    if let Some(color) = parse_hex_color(name) { return color; }
     match name {
         "red" => Color::from_rgb_u8(239, 68, 68),
         "orange" => Color::from_rgb_u8(249, 115, 22),
@@ -220,24 +246,33 @@ pub fn color_from_name(name: &str) -> Color {
         "yellow" => Color::from_rgb_u8(234, 179, 8),
         "blue" => Color::from_rgb_u8(59, 130, 246),
         "pink" => Color::from_rgb_u8(236, 72, 153),
-        "white" => Color::from_rgb_u8(245, 245, 245),
         "gray" => Color::from_rgb_u8(156, 163, 175),
         "purple" => Color::from_rgb_u8(140, 109, 216),
         _ => Color::from_rgb_u8(39, 191, 206),
     }
 }
 
-pub fn is_account_color(name: &str) -> bool {
-    ACCOUNT_COLORS.contains(&name)
+fn parse_hex_color(value: &str) -> Option<Color> {
+    let hex = value.strip_prefix('#')?;
+    if hex.len() != 6 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) { return None; }
+    let red = u8::from_str_radix(&hex[0..2], 16).ok()?;
+    let green = u8::from_str_radix(&hex[2..4], 16).ok()?;
+    let blue = u8::from_str_radix(&hex[4..6], 16).ok()?;
+    Some(Color::from_rgb_u8(red, green, blue))
 }
 
-pub const ACCOUNT_COLORS: [&str; 11] = [
-    "red", "orange", "yellow", "green", "cyan", "blue", "purple", "pink", "white", "gray", "black",
+pub fn is_account_color(name: &str) -> bool {
+    ACCOUNT_COLORS.contains(&name) || parse_hex_color(name).is_some()
+}
+
+pub const ACCOUNT_COLORS: [&str; 10] = [
+    "red", "orange", "yellow", "green", "cyan", "blue", "purple", "pink", "gray", "black",
 ];
 
 #[cfg(test)]
 mod tests {
-    use super::{ACCOUNT_COLORS, is_account_color};
+    use super::{ACCOUNT_COLORS, color_from_name, is_account_color, mask_account_name, reset_timer_color};
+    use crate::domain::RateWindow;
 
     #[test]
     fn account_color_validation_matches_the_exposed_palette() {
@@ -246,5 +281,41 @@ mod tests {
         }
         assert!(!is_account_color(""));
         assert!(!is_account_color("chartreuse"));
+        assert!(!ACCOUNT_COLORS.contains(&"white"));
+        assert!(is_account_color("#12aBcF"));
+        assert!(!is_account_color("#12345"));
+        let custom = color_from_name("#12abcf");
+        assert_eq!((custom.red(), custom.green(), custom.blue()), (0x12, 0xab, 0xcf));
+    }
+
+    #[test]
+    fn account_name_mask_keeps_only_a_hint() {
+        assert_eq!(mask_account_name("Work"), "W•••");
+        assert_eq!(mask_account_name(""), "");
+    }
+
+    #[test]
+    fn reset_timer_moves_from_red_toward_green() {
+        let weekly_far = RateWindow {
+            used_percent: 0.0,
+            duration_mins: Some(10_080),
+            resets_at: Some(7 * 24 * 60 * 60),
+        };
+        let weekly_near = RateWindow { resets_at: Some(12 * 60 * 60), ..weekly_far.clone() };
+        let short_far = RateWindow {
+            used_percent: 0.0,
+            duration_mins: Some(300),
+            resets_at: Some(5 * 60 * 60),
+        };
+        let short_near = RateWindow { resets_at: Some(30 * 60), ..short_far.clone() };
+
+        let far = reset_timer_color(&weekly_far, 0);
+        let near = reset_timer_color(&weekly_near, 0);
+        assert!(far.red() > far.green());
+        assert!(near.green() > near.red());
+        let far = reset_timer_color(&short_far, 0);
+        let near = reset_timer_color(&short_near, 0);
+        assert!(far.red() > far.green());
+        assert!(near.green() > near.red());
     }
 }

@@ -1,4 +1,4 @@
-use crate::domain::PendingReset;
+use crate::domain::{CachedUsage, PendingReset};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{self, Write};
@@ -10,6 +10,10 @@ pub struct AppConfig {
     pub schema_version: u32,
     #[serde(default)]
     pub blur_emails: bool,
+    #[serde(default)]
+    pub blur_names: bool,
+    #[serde(default)]
+    pub color_reset_timers: bool,
     #[serde(default)]
     pub pin_short_global: bool,
     #[serde(default)]
@@ -25,6 +29,8 @@ impl Default for AppConfig {
         Self {
             schema_version: schema_version(),
             blur_emails: false,
+            blur_names: false,
+            color_reset_timers: false,
             pin_short_global: false,
             codex_executable: None,
             additional_codex_homes: Vec::new(),
@@ -95,6 +101,7 @@ pub fn app_config_dir() -> PathBuf {
 
 pub fn config_path() -> PathBuf { app_config_dir().join("config.toml") }
 pub fn pending_reset_path() -> PathBuf { app_config_dir().join("pending-reset.json") }
+pub fn usage_cache_path() -> PathBuf { app_config_dir().join("usage-cache.json") }
 
 pub fn load() -> AppConfig {
     let path = config_path();
@@ -117,6 +124,28 @@ pub fn save(config: &AppConfig) -> io::Result<()> {
     let text = toml::to_string_pretty(config)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
     atomic_write(&path, text.as_bytes())
+}
+
+pub fn load_usage_cache() -> Vec<CachedUsage> {
+    let path = usage_cache_path();
+    match fs::read_to_string(&path) {
+        Ok(text) => serde_json::from_str(&text).unwrap_or_else(|error| {
+            eprintln!("cache: could not parse {}: {error}", path.display());
+            preserve_invalid_file(&path, "usage cache");
+            Vec::new()
+        }),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Vec::new(),
+        Err(error) => {
+            eprintln!("cache: could not read {}: {error}", path.display());
+            Vec::new()
+        }
+    }
+}
+
+pub fn save_usage_cache(cache: &[CachedUsage]) -> io::Result<()> {
+    let text = serde_json::to_vec_pretty(cache)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    atomic_write(&usage_cache_path(), &text)
 }
 
 
@@ -248,7 +277,8 @@ fn preserve_invalid_file(path: &Path, label: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::{AccountPreference, atomic_write};
+    use super::{AccountPreference, AppConfig, atomic_write};
+    use crate::domain::{CachedUsage, UsageSnapshot};
     use std::fs;
 
     #[test]
@@ -286,5 +316,30 @@ pin_short = false
         let restored: AccountPreference = toml::from_str(&serialized).unwrap();
 
         assert!(restored.expanded);
+    }
+
+    #[test]
+    fn older_settings_default_new_display_options_to_off() {
+        let config: AppConfig = toml::from_str("schema_version = 1\n").unwrap();
+        assert!(!config.blur_names);
+        assert!(!config.color_reset_timers);
+    }
+
+    #[test]
+    fn usage_cache_round_trips_without_authentication_data() {
+        let cache = vec![CachedUsage {
+            home: "/tmp/example".into(),
+            snapshot: UsageSnapshot {
+                email: Some("cached@example.com".into()),
+                bucket_name: Some("codex".into()),
+                windows: Vec::new(),
+                reset_available_count: 0,
+                reset_credits: Vec::new(),
+            },
+        }];
+        let encoded = serde_json::to_string(&cache).unwrap();
+        let restored: Vec<CachedUsage> = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(restored[0].snapshot.email.as_deref(), Some("cached@example.com"));
+        assert!(!encoded.contains("token"));
     }
 }

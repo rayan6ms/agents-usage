@@ -8,7 +8,7 @@ mod domain;
 mod ui_model;
 
 use crate::config::{AppConfig, AccountPreference};
-use crate::domain::{AccountRecord, PendingReset};
+use crate::domain::{AccountRecord, CachedUsage, PendingReset, UsageSnapshot};
 use slint::{CloseRequestResponse, ComponentHandle};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -31,8 +31,9 @@ const PANEL_GAP_PX: i32 = 6;
 const SCREEN_MARGIN_PX: i32 = 5;
 const OPEN_REFRESH_FRESHNESS: Duration = Duration::from_secs(5);
 const STARTUP_REFRESH_DELAY: Duration = Duration::from_secs(10);
-const MAX_RPC_CONCURRENCY: usize = 4;
-const INTERACTIVE_REFRESH_CONCURRENCY: usize = 4;
+const MAX_RPC_CONCURRENCY: usize = 8;
+const INTERACTIVE_REFRESH_CONCURRENCY: usize = 8;
+const STARTUP_REFRESH_CONCURRENCY: usize = 2;
 const INTERACTIVE_DISCOVERY_CONCURRENCY: usize = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -102,6 +103,8 @@ enum WorkerCommand {
     PersistSettings,
     ConsumeReset { account_id: String, credit_id: String },
     HidePanel,
+    #[cfg(target_os = "linux")]
+    CheckPopupFocus,
     Tick,
     Quit,
 }
@@ -436,7 +439,11 @@ fn focus_x11_popup(xid: u32) -> Result<(), Box<dyn std::error::Error>> {
 fn x11_popup_has_input_focus(xid: u32) -> bool {
     use x11rb::protocol::xproto::ConnectionExt as _;
     let Ok((connection, _)) = x11rb::connect(None) else { return false; };
-    connection.get_input_focus().ok().and_then(|cookie| cookie.reply().ok()).map(|reply| reply.focus == xid).unwrap_or(false)
+    connection
+        .get_input_focus()
+        .ok()
+        .and_then(|cookie| cookie.reply().ok())
+        .is_some_and(|reply| reply.focus == xid)
 }
 
 fn panel_position_for_size(anchor: PanelAnchor, panel_w: i32, panel_h: i32) -> slint::PhysicalPosition {
@@ -626,6 +633,8 @@ fn render_ui(
     ui.set_accounts(model);
     ui.set_enabled_account_count(enabled_count as i32);
     ui.set_blur_emails(cfg.blur_emails);
+    ui.set_blur_names(cfg.blur_names);
+    ui.set_color_reset_timers(cfg.color_reset_timers);
     ui.set_pin_short_global(cfg.pin_short_global);
     ui.set_accounts_summary(format!("{} discovered · refresh also checks for new Codex homes", records.len()).into());
     if let Some(text) = empty_text { ui.set_empty_text(text.into()); }
@@ -665,6 +674,14 @@ fn color_index_for_home(path: &Path) -> usize {
     hash as usize
 }
 
+fn normalized_account_color(value: Option<&str>, fallback: &str) -> String {
+    match value {
+        Some("white") => "gray".into(),
+        Some(value) if ui_model::is_account_color(value) => value.into(),
+        _ => fallback.into(),
+    }
+}
+
 fn source_account_name(path: &Path) -> String {
     path.file_name()
         .and_then(|value| value.to_str())
@@ -691,6 +708,10 @@ fn normalized_display_name(value: &str) -> Option<String> {
     } else {
         Some(value.chars().take(64).collect())
     }
+}
+
+fn color_hex(color: slint::Color) -> String {
+    format!("#{:02x}{:02x}{:02x}", color.red(), color.green(), color.blue())
 }
 
 fn move_target(index: usize, len: usize, direction: i32) -> Option<usize> {
@@ -733,7 +754,9 @@ fn record_from_snapshot(
         .unwrap_or_else(|| source_account_name(&home));
     let expand_globally = config.pin_short_global;
     let pref = config::preference_for_mut(config, &home);
-    if pref.color.is_none() { pref.color = Some(ui_model::ACCOUNT_COLORS[color_index % ui_model::ACCOUNT_COLORS.len()].into()); }
+    let fallback_color = ui_model::ACCOUNT_COLORS[color_index % ui_model::ACCOUNT_COLORS.len()];
+    let color_name = normalized_account_color(pref.color.as_deref(), fallback_color);
+    if pref.color.as_deref() != Some(color_name.as_str()) { pref.color = Some(color_name.clone()); }
     if pref.display_name.is_none() { pref.display_name = Some(discovered_name.clone()); }
     if expand_globally { pref.expanded = true; }
     AccountRecord {
@@ -741,10 +764,11 @@ fn record_from_snapshot(
         home,
         provider_id: "openai".into(),
         display_name: pref.display_name.clone().unwrap_or(discovered_name),
-        color_name: pref.color.clone().unwrap_or_else(|| "cyan".into()),
+        color_name,
         enabled: pref.enabled,
         pin_short: pref.pin_short,
         expanded: pref.expanded,
+        name_revealed: false,
         email_revealed: false,
         confirm_credit_id: String::new(),
         snapshot: Some(snapshot),
@@ -756,6 +780,7 @@ fn placeholder_record(
     pref: &AccountPreference,
     index: usize,
     expand_globally: bool,
+    cached_snapshot: Option<UsageSnapshot>,
 ) -> Option<AccountRecord> {
     if !pref.home.is_dir() { return None; }
     Some(AccountRecord {
@@ -763,15 +788,39 @@ fn placeholder_record(
         home: pref.home.clone(),
         provider_id: "openai".into(),
         display_name: pref.display_name.clone().unwrap_or_else(|| source_account_name(&pref.home)),
-        color_name: pref.color.clone().unwrap_or_else(|| ui_model::ACCOUNT_COLORS[index % ui_model::ACCOUNT_COLORS.len()].into()),
+        color_name: normalized_account_color(
+            pref.color.as_deref(),
+            ui_model::ACCOUNT_COLORS[index % ui_model::ACCOUNT_COLORS.len()],
+        ),
         enabled: pref.enabled,
         pin_short: pref.pin_short,
         expanded: pref.expanded || expand_globally,
+        name_revealed: false,
         email_revealed: false,
         confirm_credit_id: String::new(),
-        snapshot: None,
+        snapshot: cached_snapshot,
         last_error: None,
     })
+}
+
+fn persist_usage_cache(accounts: &Arc<Mutex<Vec<AccountRecord>>>) {
+    let cache = accounts
+        .lock()
+        .map(|records| {
+            records
+                .iter()
+                .filter_map(|record| {
+                    record.snapshot.clone().map(|snapshot| CachedUsage {
+                        home: record.home.clone(),
+                        snapshot,
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if let Err(error) = config::save_usage_cache(&cache) {
+        eprintln!("cache: could not persist usage snapshots: {error}");
+    }
 }
 
 fn apply_snapshot(
@@ -800,6 +849,7 @@ fn apply_snapshot(
     if let Ok(mut records) = accounts.lock() {
         if let Some(existing) = records.iter_mut().find(|record| record.id == id) {
             new_record.expanded = existing.expanded;
+            new_record.name_revealed = existing.name_revealed;
             new_record.email_revealed = existing.email_revealed;
             new_record.confirm_credit_id = existing.confirm_credit_id.clone();
             *existing = new_record;
@@ -818,6 +868,7 @@ fn apply_snapshot(
             .unwrap_or_default();
         records.sort_by_key(|record| order.get(&record.id).copied().unwrap_or(usize::MAX));
     }
+    persist_usage_cache(accounts);
 }
 
 fn apply_refresh_error(
@@ -1214,11 +1265,25 @@ fn spawn_worker(
                     }
                 });
 
+                #[cfg(target_os = "linux")]
+                {
+                    let focus_tx = tx.clone();
+                    tokio::spawn(async move {
+                        let mut interval = tokio::time::interval(Duration::from_millis(200));
+                        loop {
+                            interval.tick().await;
+                            if focus_tx.send(WorkerCommand::CheckPopupFocus).is_err() { break; }
+                        }
+                    });
+                }
+
                 let refreshing = Arc::new(AtomicBool::new(false));
                 let refresh_pending = Arc::new(AtomicBool::new(false));
                 let discovering = Arc::new(AtomicBool::new(false));
                 let rpc_semaphore = Arc::new(Semaphore::new(MAX_RPC_CONCURRENCY));
                 let last_data_refresh = Arc::new(Mutex::new(None::<Instant>));
+                #[cfg(target_os = "linux")]
+                let popup_focus_seen = Arc::new(AtomicBool::new(false));
 
                 while let Some(command) = rx.recv().await {
                     match command {
@@ -1228,6 +1293,7 @@ fn spawn_worker(
                             let opening = !panel_visible.load(Ordering::SeqCst);
                             panel_visible.store(opening, Ordering::SeqCst);
                             if opening {
+                                popup_focus_seen.store(false, Ordering::SeqCst);
                                 schedule_show_dashboard(
                                     ui.clone(), Some(anchor), native_xid_shared.clone(), panel_visible.clone(),
                                 );
@@ -1243,6 +1309,7 @@ fn spawn_worker(
                         WorkerCommand::OpenAt(anchor) => {
                             if let Ok(mut shared) = last_anchor_shared.lock() { *shared = Some(anchor); }
                             panel_visible.store(true, Ordering::SeqCst);
+                            popup_focus_seen.store(false, Ordering::SeqCst);
                             schedule_show_dashboard(
                                 ui.clone(), Some(anchor), native_xid_shared.clone(), panel_visible.clone(),
                             );
@@ -1252,6 +1319,7 @@ fn spawn_worker(
                         WorkerCommand::OpenSettingsAt(anchor) => {
                             if let Ok(mut shared) = last_anchor_shared.lock() { *shared = Some(anchor); }
                             panel_visible.store(true, Ordering::SeqCst);
+                            popup_focus_seen.store(false, Ordering::SeqCst);
                             schedule_show_settings(
                                 ui.clone(), Some(anchor), native_xid_shared.clone(), panel_visible.clone(),
                             );
@@ -1259,6 +1327,8 @@ fn spawn_worker(
                         }
                         WorkerCommand::OpenSettings => {
                             panel_visible.store(true, Ordering::SeqCst);
+                            #[cfg(target_os = "linux")]
+                            popup_focus_seen.store(false, Ordering::SeqCst);
                             let anchor = last_anchor_shared.lock().ok().and_then(|value| *value);
                             schedule_show_settings(
                                 ui.clone(), anchor, native_xid_shared.clone(), panel_visible.clone(),
@@ -1266,6 +1336,8 @@ fn spawn_worker(
                         }
                         WorkerCommand::OpenStandalone => {
                             panel_visible.store(true, Ordering::SeqCst);
+                            #[cfg(target_os = "linux")]
+                            popup_focus_seen.store(false, Ordering::SeqCst);
                             let anchor = last_anchor_shared.lock().ok().and_then(|value| *value);
                             schedule_show_dashboard(
                                 ui.clone(), anchor, native_xid_shared.clone(), panel_visible.clone(),
@@ -1275,6 +1347,8 @@ fn spawn_worker(
                         WorkerCommand::ToggleAtPoint { x, y, icon_w, icon_h } => {
                             let opening = !panel_visible.load(Ordering::SeqCst);
                             panel_visible.store(opening, Ordering::SeqCst);
+                            #[cfg(target_os = "linux")]
+                            if opening { popup_focus_seen.store(false, Ordering::SeqCst); }
                             let ui_weak = ui.clone();
                             let native_xid = native_xid_shared.clone();
                             let last_anchor = last_anchor_shared.clone();
@@ -1346,7 +1420,7 @@ fn spawn_worker(
                                 refresh_known_accounts(
                                     codex_path.clone(), accounts2.clone(), config2.clone(), ui2.clone(), anchor2.clone(),
                                     rpc_semaphore2.clone(),
-                                    if startup_pass { 1 } else { INTERACTIVE_REFRESH_CONCURRENCY },
+                                    if startup_pass { STARTUP_REFRESH_CONCURRENCY } else { INTERACTIVE_REFRESH_CONCURRENCY },
                                 ).await;
 
                                 // Once known accounts are current, the visible refresh operation is done.
@@ -1391,7 +1465,25 @@ fn spawn_worker(
                         }
                         WorkerCommand::HidePanel => {
                             panel_visible.store(false, Ordering::SeqCst);
+                            #[cfg(target_os = "linux")]
+                            popup_focus_seen.store(false, Ordering::SeqCst);
                             let _ = ui.upgrade_in_event_loop(|ui| { let _ = ui.hide(); });
+                        }
+                        #[cfg(target_os = "linux")]
+                        WorkerCommand::CheckPopupFocus => {
+                            if !panel_visible.load(Ordering::SeqCst) { continue; }
+                            let focused = native_xid_shared
+                                .lock()
+                                .ok()
+                                .and_then(|guard| *guard)
+                                .is_some_and(x11_popup_has_input_focus);
+                            if focused {
+                                popup_focus_seen.store(true, Ordering::SeqCst);
+                            } else if popup_focus_seen.load(Ordering::SeqCst) {
+                                panel_visible.store(false, Ordering::SeqCst);
+                                popup_focus_seen.store(false, Ordering::SeqCst);
+                                let _ = ui.upgrade_in_event_loop(|ui| { let _ = ui.hide(); });
+                            }
                         }
                         WorkerCommand::Tick => {
                             schedule_render(ui.clone(), accounts.clone(), config.clone(), last_anchor_shared.clone(), None);
@@ -1513,12 +1605,23 @@ fn main() -> Result<(), slint::PlatformError> {
     ui.window().on_close_requested(|| CloseRequestResponse::HideWindow);
 
     let loaded_config = config::load();
+    let cached_usage = config::load_usage_cache()
+        .into_iter()
+        .map(|cached| (canonical_id(&cached.home), cached.snapshot))
+        .collect::<HashMap<_, _>>();
     let expand_globally = loaded_config.pin_short_global;
     let initial_records = loaded_config
         .accounts
         .iter()
         .enumerate()
-        .filter_map(|(index, pref)| placeholder_record(pref, index, expand_globally))
+        .filter_map(|(index, pref)| {
+            placeholder_record(
+                pref,
+                index,
+                expand_globally,
+                cached_usage.get(&canonical_id(&pref.home)).cloned(),
+            )
+        })
         .collect::<Vec<_>>();
 
     let accounts = Arc::new(Mutex::new(initial_records));
@@ -1562,6 +1665,31 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ui_weak = ui.as_weak();
         let accounts = accounts.clone();
+        let config_arc = config.clone();
+        let last_anchor = last_anchor_shared.clone();
+        let tx = tx.clone();
+        ui.on_account_custom_color_changed(move |id, color| {
+            let color = color_hex(color);
+            let home = if let Ok(mut records) = accounts.lock() {
+                records.iter_mut().find(|record| record.id == id.as_str()).map(|record| {
+                    record.color_name = color.clone();
+                    record.home.clone()
+                })
+            } else { None };
+            if let Some(home) = home {
+                if let Ok(mut cfg) = config_arc.lock() {
+                    config::preference_for_mut(&mut cfg, &home).color = Some(color);
+                }
+                if let Some(ui) = ui_weak.upgrade() {
+                    render_ui(&ui, &accounts, &config_arc, &last_anchor, None);
+                }
+                send(&tx, WorkerCommand::PersistSettings);
+            }
+        });
+    }
+    {
+        let ui_weak = ui.as_weak();
+        let accounts = accounts.clone();
         let config = config.clone();
         let last_anchor = last_anchor_shared.clone();
         let tx = tx.clone();
@@ -1580,6 +1708,20 @@ fn main() -> Result<(), slint::PlatformError> {
                     config::preference_for_mut(&mut cfg, &home).expanded = expanded;
                 }
                 send(&tx, WorkerCommand::PersistSettings);
+            }
+            if let Some(ui) = ui_weak.upgrade() { render_ui(&ui, &accounts, &config, &last_anchor, None); }
+        });
+    }
+    {
+        let ui_weak = ui.as_weak();
+        let accounts = accounts.clone();
+        let config = config.clone();
+        let last_anchor = last_anchor_shared.clone();
+        ui.on_account_toggle_name(move |id| {
+            if let Ok(mut records) = accounts.lock() {
+                if let Some(record) = records.iter_mut().find(|record| record.id == id.as_str()) {
+                    record.name_revealed = !record.name_revealed;
+                }
             }
             if let Some(ui) = ui_weak.upgrade() { render_ui(&ui, &accounts, &config, &last_anchor, None); }
         });
@@ -1640,6 +1782,30 @@ fn main() -> Result<(), slint::PlatformError> {
         let tx = tx.clone();
         ui.on_blur_emails_changed(move |value| {
             if let Ok(mut cfg) = config_arc.lock() { cfg.blur_emails = value; }
+            if let Some(ui) = ui_weak.upgrade() { render_ui(&ui, &accounts, &config_arc, &last_anchor, None); }
+            send(&tx, WorkerCommand::PersistSettings);
+        });
+    }
+    {
+        let ui_weak = ui.as_weak();
+        let accounts = accounts.clone();
+        let config_arc = config.clone();
+        let last_anchor = last_anchor_shared.clone();
+        let tx = tx.clone();
+        ui.on_blur_names_changed(move |value| {
+            if let Ok(mut cfg) = config_arc.lock() { cfg.blur_names = value; }
+            if let Some(ui) = ui_weak.upgrade() { render_ui(&ui, &accounts, &config_arc, &last_anchor, None); }
+            send(&tx, WorkerCommand::PersistSettings);
+        });
+    }
+    {
+        let ui_weak = ui.as_weak();
+        let accounts = accounts.clone();
+        let config_arc = config.clone();
+        let last_anchor = last_anchor_shared.clone();
+        let tx = tx.clone();
+        ui.on_color_reset_timers_changed(move |value| {
+            if let Ok(mut cfg) = config_arc.lock() { cfg.color_reset_timers = value; }
             if let Some(ui) = ui_weak.upgrade() { render_ui(&ui, &accounts, &config_arc, &last_anchor, None); }
             send(&tx, WorkerCommand::PersistSettings);
         });
@@ -1777,19 +1943,11 @@ fn main() -> Result<(), slint::PlatformError> {
     // Real popover behavior: Escape and an actual focus loss dismiss it.
     {
         let tx = tx.clone();
-        #[cfg(target_os = "linux")]
-        let native_xid_shared = native_xid_shared.clone();
         ui.window().on_winit_window_event(move |_slint_window, event| {
             match event {
                 winit::event::WindowEvent::Focused(focused) => {
                     #[cfg(target_os = "linux")]
-                    let xid = native_xid_shared.lock().ok().and_then(|guard| *guard);
-                    #[cfg(target_os = "linux")]
-                    let has_x11_focus = xid.map(x11_popup_has_input_focus).unwrap_or(false);
-                    #[cfg(target_os = "linux")]
-                    if !*focused && xid.is_some() && !has_x11_focus {
-                        send(&tx, WorkerCommand::HidePanel);
-                    }
+                    if !*focused { send(&tx, WorkerCommand::CheckPopupFocus); }
                     #[cfg(not(target_os = "linux"))]
                     if !*focused { send(&tx, WorkerCommand::HidePanel); }
                 }
@@ -1826,10 +1984,11 @@ fn main() -> Result<(), slint::PlatformError> {
 mod tests {
     use super::{
         LaunchMode, PanelAnchor, PanelEdge, SCREEN_MARGIN_PX, launch_mode, move_account,
-        infer_panel_edge, move_target, normalized_display_name, panel_position_for_size,
+        infer_panel_edge, move_target, normalized_account_color, normalized_display_name, panel_position_for_size,
         placeholder_record,
     };
     use crate::config::{AccountPreference, AppConfig};
+    use crate::domain::UsageSnapshot;
     use std::fs;
 
     #[test]
@@ -1888,6 +2047,13 @@ mod tests {
     }
 
     #[test]
+    fn removed_white_color_migrates_to_gray() {
+        assert_eq!(normalized_account_color(Some("white"), "cyan"), "gray");
+        assert_eq!(normalized_account_color(Some("#12abcf"), "cyan"), "#12abcf");
+        assert_eq!(normalized_account_color(Some("invalid"), "cyan"), "cyan");
+    }
+
+    #[test]
     fn account_move_targets_stop_at_list_boundaries() {
         assert_eq!(move_target(2, 4, -1), Some(1));
         assert_eq!(move_target(2, 4, 1), Some(3));
@@ -1911,7 +2077,7 @@ mod tests {
             ..AppConfig::default()
         };
         let mut records = config.accounts.iter().enumerate()
-            .filter_map(|(index, preference)| placeholder_record(preference, index, false))
+            .filter_map(|(index, preference)| placeholder_record(preference, index, false, None))
             .collect::<Vec<_>>();
         let second_id = records[1].id.clone();
 
@@ -1935,9 +2101,28 @@ mod tests {
             ..collapsed.clone()
         };
 
-        assert!(!placeholder_record(&collapsed, 0, false).unwrap().expanded);
-        assert!(placeholder_record(&expanded, 0, false).unwrap().expanded);
-        assert!(placeholder_record(&collapsed, 0, true).unwrap().expanded);
+        assert!(!placeholder_record(&collapsed, 0, false, None).unwrap().expanded);
+        assert!(placeholder_record(&expanded, 0, false, None).unwrap().expanded);
+        assert!(placeholder_record(&collapsed, 0, true, None).unwrap().expanded);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn placeholder_restores_cached_usage_before_refresh() {
+        let root = std::env::temp_dir().join(format!("agents-usage-cache-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let preference = AccountPreference { home: root.clone(), ..AccountPreference::default() };
+        let snapshot = UsageSnapshot {
+            email: Some("cached@example.com".into()),
+            bucket_name: Some("codex".into()),
+            windows: Vec::new(),
+            reset_available_count: 0,
+            reset_credits: Vec::new(),
+        };
+
+        let record = placeholder_record(&preference, 0, false, Some(snapshot)).unwrap();
+        assert_eq!(record.email(), "cached@example.com");
 
         fs::remove_dir_all(root).unwrap();
     }

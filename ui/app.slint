@@ -10,7 +10,10 @@ export struct AccountView {
     id: string,
     provider-id: string,
     display-name: string,
+    masked-display-name: string,
     color-name: string,
+    custom-color: bool,
+    account-color: color,
     email: string,
     masked-email: string,
     accent: color,
@@ -18,6 +21,7 @@ export struct AccountView {
     enabled: bool,
     pin-short: bool,
     expanded: bool,
+    name-revealed: bool,
     email-revealed: bool,
     confirm-credit-id: string,
     has-usage: bool,
@@ -28,12 +32,14 @@ export struct AccountView {
     long-percent-text: string,
     has-long-reset-time: bool,
     long-reset-text: string,
+    long-reset-color: color,
     has-short-limit: bool,
     short-label: string,
     short-remaining: float,
     short-percent-text: string,
     has-short-reset-time: bool,
     short-reset-text: string,
+    short-reset-color: color,
     has-reset-credits: bool,
     reset-count-text: string,
     reset-credits: [ResetCreditView],
@@ -141,10 +147,10 @@ component ProviderMark inherits Rectangle {
     background: transparent;
 
     Image {
-        x: 1px;
-        y: 2px;
-        width: 18px;
-        height: 18px;
+        x: 0px;
+        y: 1px;
+        width: 20px;
+        height: 20px;
         source: root.provider-id == "anthropic"
             ? @image-url("../assets/providers/anthropic.svg")
             : root.provider-id == "google"
@@ -228,7 +234,9 @@ component LimitLine inherits Rectangle {
     in property <string> percent-text;
     in property <color> accent;
     in property <string> reset-text: "";
+    in property <color> reset-color: Palette.foreground;
     in property <bool> show-reset-text: false;
+    in property <bool> color-reset-timer: false;
     height: 18px;
     background: transparent;
 
@@ -236,14 +244,30 @@ component LimitLine inherits Rectangle {
         width: parent.width;
         height: parent.height;
         spacing: 5px;
-        Text {
-            text: root.show-reset-text
-                ? root.label + " • resets in " + root.reset-text
-                : root.label;
-            color: Palette.foreground;
-            font-size: 10px;
-            opacity: 0.70;
-            vertical-alignment: center;
+        HorizontalLayout {
+            spacing: 0px;
+            Text {
+                text: root.label;
+                color: Palette.foreground;
+                font-size: 10px;
+                opacity: 0.70;
+                vertical-alignment: center;
+            }
+            if root.show-reset-text: Text {
+                text: " • resets in ";
+                color: Palette.foreground;
+                font-size: 10px;
+                opacity: 0.70;
+                vertical-alignment: center;
+            }
+            if root.show-reset-text: Text {
+                text: root.reset-text;
+                color: root.color-reset-timer ? root.reset-color : Palette.foreground;
+                font-size: 10px;
+                font-weight: root.color-reset-timer ? 600 : 400;
+                opacity: root.color-reset-timer ? 0.96 : 0.70;
+                vertical-alignment: center;
+            }
         }
         Rectangle {
             height: 18px;
@@ -428,10 +452,13 @@ component ResetCreditRow inherits Rectangle {
 
 component AccountRow inherits Rectangle {
     in property <AccountView> account;
+    in property <bool> blur-names: false;
     in property <bool> blur-emails: false;
+    in property <bool> color-reset-timers: false;
     in property <bool> motion-enabled: true;
     in property <bool> reset-busy: false;
     callback toggle-details(string);
+    callback toggle-name(string);
     callback toggle-email(string);
     callback arm-reset(string, string);
     callback cancel-reset(string);
@@ -458,12 +485,29 @@ component AccountRow inherits Rectangle {
                 accent: root.account.accent;
                 show-accent: root.account.show-accent;
             }
-            Text {
-                text: root.account.display-name;
-                color: Palette.foreground;
-                font-size: 12px;
-                font-weight: 600;
-                vertical-alignment: center;
+            Rectangle {
+                width: min(132px, name-text.preferred-width);
+                height: 22px;
+                background: transparent;
+                accessible-role: button;
+                accessible-label: root.blur-names && !root.account.name-revealed
+                    ? "Reveal account name"
+                    : root.account.display-name;
+                name-text := Text {
+                    width: parent.width;
+                    height: parent.height;
+                    text: root.blur-names && !root.account.name-revealed
+                        ? root.account.masked-display-name
+                        : root.account.display-name;
+                    color: Palette.foreground;
+                    font-size: 12px;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                TouchArea {
+                    clicked => { if (root.blur-names) { root.toggle-name(root.account.id); } }
+                }
             }
             Rectangle {
                 horizontal-stretch: 1;
@@ -516,7 +560,9 @@ component AccountRow inherits Rectangle {
             percent-text: root.account.long-percent-text;
             accent: root.account.accent;
             reset-text: root.account.long-reset-text;
+            reset-color: root.account.long-reset-color;
             show-reset-text: root.account.expanded && root.account.has-long-reset-time;
+            color-reset-timer: root.color-reset-timers;
         }
         if !root.account.has-usage: Text {
             height: 18px;
@@ -542,7 +588,9 @@ component AccountRow inherits Rectangle {
             percent-text: root.account.short-percent-text;
             accent: root.account.accent;
             reset-text: root.account.short-reset-text;
+            reset-color: root.account.short-reset-color;
             show-reset-text: root.account.expanded && root.account.has-short-reset-time;
+            color-reset-timer: root.color-reset-timers;
         }
 
         Rectangle {
@@ -560,7 +608,9 @@ component AccountRow inherits Rectangle {
                     percent-text: root.account.short-percent-text;
                     accent: root.account.accent;
                     reset-text: root.account.short-reset-text;
+                    reset-color: root.account.short-reset-color;
                     show-reset-text: root.account.has-short-reset-time;
+                    color-reset-timer: root.color-reset-timers;
                 }
 
                 if root.account.has-reset-credits: DetailLine {
@@ -657,6 +707,159 @@ component ColorChoiceButton inherits Rectangle {
     TouchArea { clicked => { root.clicked(root.choice.name); } }
 }
 
+component CustomColorButton inherits Rectangle {
+    in property <color> value;
+    in property <bool> selected: false;
+    callback clicked();
+    width: 24px;
+    height: 24px;
+    background: area.has-hover ? Palette.alternate-background : transparent;
+    border-radius: 5px;
+    accessible-role: button;
+    accessible-label: "Choose a custom account color";
+    accessible-checked: root.selected;
+    accessible-action-default => { root.clicked(); }
+
+    Rectangle {
+        x: 4px;
+        y: 4px;
+        width: 16px;
+        height: 16px;
+        border-radius: 8px;
+        background: root.value;
+        border-width: root.selected ? 3px : 1px;
+        border-color: root.selected ? Palette.foreground : Palette.border;
+    }
+    Text {
+        x: 15px;
+        y: 10px;
+        width: 8px;
+        height: 10px;
+        text: "+";
+        color: Palette.foreground;
+        font-size: 8px;
+        font-weight: 700;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    area := TouchArea { clicked => { root.clicked(); } }
+}
+
+component HsvColorPicker inherits Rectangle {
+    in-out property <float> hue: 180;
+    in-out property <float> saturation: 1;
+    in-out property <float> value: 1;
+    callback picked(color);
+    height: 94px;
+    background: transparent;
+
+    function update-saturation-value(x: length, y: length) {
+        root.saturation = max(0, min(1, x / saturation-value.width));
+        root.value = max(0, min(1, 1 - y / saturation-value.height));
+    }
+
+    function update-hue(x: length) {
+        root.hue = max(0, min(359.99, x / hue-strip.width * 360));
+    }
+
+    saturation-value := Rectangle {
+        x: 50px;
+        y: 4px;
+        width: parent.width - 50px;
+        height: 66px;
+        border-radius: 4px;
+        clip: true;
+        background: @linear-gradient(90deg, white 0%, hsv(root.hue, 1, 1) 100%);
+        Rectangle {
+            width: parent.width;
+            height: parent.height;
+            background: @linear-gradient(180deg, #00000000 0%, #000000 100%);
+        }
+        Rectangle {
+            x: root.saturation * parent.width - 4px;
+            y: (1 - root.value) * parent.height - 4px;
+            width: 8px;
+            height: 8px;
+            border-radius: 4px;
+            background: transparent;
+            border-width: 1.5px;
+            border-color: white;
+        }
+        sv-area := TouchArea {
+            pointer-event(event) => {
+                if (event.button == PointerEventButton.left && event.kind != PointerEventKind.cancel) {
+                    root.update-saturation-value(self.mouse-x, self.mouse-y);
+                    if (event.kind == PointerEventKind.up) {
+                        root.picked(hsv(root.hue, root.saturation, root.value));
+                    }
+                }
+            }
+            moved => {
+                if (self.pressed) {
+                    root.update-saturation-value(self.mouse-x, self.mouse-y);
+                }
+            }
+        }
+    }
+
+    hue-strip := Rectangle {
+        x: 50px;
+        y: 78px;
+        width: parent.width - 50px;
+        height: 12px;
+        border-radius: 4px;
+        clip: true;
+        background: @linear-gradient(90deg,
+            #ef4444 0%, #eab308 16.7%, #22c55e 33.3%, #27bfce 50%,
+            #3b82f6 66.7%, #8c6dd8 83.3%, #ef4444 100%);
+        Rectangle {
+            x: root.hue / 360 * parent.width - 2px;
+            y: 0px;
+            width: 4px;
+            height: parent.height;
+            background: white;
+            border-width: 1px;
+            border-color: #111111;
+        }
+        hue-area := TouchArea {
+            pointer-event(event) => {
+                if (event.button == PointerEventButton.left && event.kind != PointerEventKind.cancel) {
+                    root.update-hue(self.mouse-x);
+                    if (event.kind == PointerEventKind.up) {
+                        root.picked(hsv(root.hue, root.saturation, root.value));
+                    }
+                }
+            }
+            moved => {
+                if (self.pressed) { root.update-hue(self.mouse-x); }
+            }
+        }
+    }
+
+    Rectangle {
+        x: 4px;
+        y: 4px;
+        width: 34px;
+        height: 34px;
+        border-radius: 17px;
+        background: hsv(root.hue, root.saturation, root.value);
+        border-width: 1px;
+        border-color: Palette.border;
+    }
+    Text {
+        x: 0px;
+        y: 43px;
+        width: 42px;
+        height: 26px;
+        text: "Custom";
+        color: Palette.foreground;
+        font-size: 8px;
+        opacity: 0.58;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
 component AccountSettings inherits Rectangle {
     in property <AccountView> account;
     in property <[ColorChoice]> colors;
@@ -664,10 +867,15 @@ component AccountSettings inherits Rectangle {
     in property <bool> can-move-down: false;
     callback name-changed(string, string);
     callback color-changed(string, string);
+    callback custom-color-changed(string, color);
     callback enabled-changed(string, bool);
     callback pin-short-changed(string, bool);
     callback move-requested(string, int);
-    height: root.account.has-short-limit ? 167px : 122px;
+    private property <bool> picker-open: false;
+    in-out property <float> picker-hue: root.account.account-color.to-hsv().hue;
+    in-out property <float> picker-saturation: root.account.account-color.to-hsv().saturation;
+    in-out property <float> picker-value: root.account.account-color.to-hsv().value;
+    height: (root.account.has-short-limit ? 167px : 122px) + (root.picker-open ? 98px : 0px);
     background: transparent;
 
     VerticalLayout {
@@ -769,8 +977,22 @@ component AccountSettings inherits Rectangle {
             for choice in root.colors: ColorChoiceButton {
                 choice: choice;
                 selected: root.account.color-name == choice.name;
-                clicked(name) => { root.color-changed(root.account.id, name); }
+                clicked(name) => {
+                    root.picker-open = false;
+                    root.color-changed(root.account.id, name);
+                }
             }
+            CustomColorButton {
+                value: root.account.account-color;
+                selected: root.account.custom-color;
+                clicked => { root.picker-open = !root.picker-open; }
+            }
+        }
+        if root.picker-open: HsvColorPicker {
+            hue: root.picker-hue;
+            saturation: root.picker-saturation;
+            value: root.picker-value;
+            picked(value) => { root.custom-color-changed(root.account.id, value); }
         }
         if root.account.has-short-limit: SettingRow {
             title: "Show " + root.account.short-label;
@@ -791,7 +1013,9 @@ export component MainWindow inherits Window {
 
     in property <[AccountView]> accounts;
     in-out property <bool> settings-visible: false;
+    in-out property <bool> blur-names: false;
     in-out property <bool> blur-emails: false;
+    in-out property <bool> color-reset-timers: false;
     in-out property <bool> pin-short-global: false;
     in-out property <bool> motion-enabled: true;
     in-out property <bool> refreshing: false;
@@ -807,16 +1031,20 @@ export component MainWindow inherits Window {
     callback settings-requested();
     callback back-to-dashboard();
     callback account-toggle-details(string);
+    callback account-toggle-name(string);
     callback account-toggle-email(string);
     callback account-arm-reset(string, string);
     callback account-cancel-reset(string);
     callback account-confirm-reset(string, string);
     callback blur-emails-changed(bool);
+    callback blur-names-changed(bool);
+    callback color-reset-timers-changed(bool);
     callback pin-short-global-changed(bool);
     callback account-enabled-changed(string, bool);
     callback account-pin-short-changed(string, bool);
     callback account-name-changed(string, string);
     callback account-color-changed(string, string);
+    callback account-custom-color-changed(string, color);
     callback account-move-requested(string, int);
 
     private property <[ColorChoice]> account-colors: [
@@ -828,7 +1056,6 @@ export component MainWindow inherits Window {
         { name: "blue", value: #3b82f6 },
         { name: "purple", value: #8c6dd8 },
         { name: "pink", value: #ec4899 },
-        { name: "white", value: #f5f5f5 },
         { name: "gray", value: #9ca3af },
         { name: "black", value: #141414 },
     ];
@@ -912,10 +1139,13 @@ export component MainWindow inherits Window {
                 spacing: 0px;
                 for account in root.accounts: AccountRow {
                     account: account;
+                    blur-names: root.blur-names;
                     blur-emails: root.blur-emails;
+                    color-reset-timers: root.color-reset-timers;
                     motion-enabled: root.motion-enabled;
                     reset-busy: root.reset-busy;
                     toggle-details(id) => { root.account-toggle-details(id); }
+                    toggle-name(id) => { root.account-toggle-name(id); }
                     toggle-email(id) => { root.account-toggle-email(id); }
                     arm-reset(id, credit) => { root.account-arm-reset(id, credit); }
                     cancel-reset(id) => { root.account-cancel-reset(id); }
@@ -977,6 +1207,18 @@ export component MainWindow inherits Window {
                             changed(value) => { root.blur-emails-changed(value); }
                         }
                         SettingRow {
+                            title: "Blur account names";
+                            subtitle: "When enabled, click a name to reveal it";
+                            checked: root.blur-names;
+                            changed(value) => { root.blur-names-changed(value); }
+                        }
+                        SettingRow {
+                            title: "Color reset timers";
+                            subtitle: "Fade timers from red toward green as reset nears";
+                            checked: root.color-reset-timers;
+                            changed(value) => { root.color-reset-timers-changed(value); }
+                        }
+                        SettingRow {
                             title: "Always show 5-hour limits";
                             subtitle: "Show available short windows below weekly usage";
                             checked: root.pin-short-global;
@@ -999,6 +1241,7 @@ export component MainWindow inherits Window {
                             can-move-down: index + 1 < root.accounts.length;
                             name-changed(id, value) => { root.account-name-changed(id, value); }
                             color-changed(id, value) => { root.account-color-changed(id, value); }
+                            custom-color-changed(id, value) => { root.account-custom-color-changed(id, value); }
                             enabled-changed(id, value) => { root.account-enabled-changed(id, value); }
                             pin-short-changed(id, value) => { root.account-pin-short-changed(id, value); }
                             move-requested(id, direction) => { root.account-move-requested(id, direction); }
