@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.5 — 2026-08-19
+
+- Dismiss the Linux popup when clicking the bare desktop as well as another window.
+- Render the compact OpenAI provider mark directly as a pixel-aligned vector path.
+- Clarify first-run usage loading and report how many cached snapshots were restored.
+
 ## 0.2.4 — 2026-08-19
 
 - Reduced multi-account refresh latency and restored click-away popup dismissal.

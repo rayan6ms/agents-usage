@@ -446,6 +446,95 @@ fn x11_popup_has_input_focus(xid: u32) -> bool {
         .is_some_and(|reply| reply.focus == xid)
 }
 
+#[cfg(target_os = "linux")]
+fn point_inside_anchor(x: i32, y: i32, anchor: PanelAnchor) -> bool {
+    x >= anchor.icon_x
+        && x < anchor.icon_x.saturating_add(anchor.icon_w)
+        && y >= anchor.icon_y
+        && y < anchor.icon_y.saturating_add(anchor.icon_h)
+}
+
+#[cfg(target_os = "linux")]
+fn run_x11_outside_click_listener(
+    tx: UnboundedSender<WorkerCommand>,
+    panel_visible: Arc<AtomicBool>,
+    native_xid_shared: Arc<Mutex<Option<u32>>>,
+    last_anchor_shared: Arc<Mutex<Option<PanelAnchor>>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use x11rb::connection::Connection as _;
+    use x11rb::protocol::Event;
+    use x11rb::protocol::xinput::{ConnectionExt as _, Device, EventMask, XIEventMask};
+    use x11rb::protocol::xproto::ConnectionExt as _;
+
+    let (connection, screen_index) = x11rb::connect(None)?;
+    let root = connection.setup().roots[screen_index].root;
+    connection
+        .xinput_xi_select_events(root, &[EventMask {
+            deviceid: Device::ALL_MASTER.into(),
+            mask: vec![XIEventMask::RAW_BUTTON_PRESS],
+        }])?
+        .check()?;
+    connection.flush()?;
+
+    loop {
+        let event = connection.wait_for_event()?;
+        if !matches!(event, Event::XinputRawButtonPress(_))
+            || !panel_visible.load(Ordering::SeqCst)
+        {
+            continue;
+        }
+        let Some(xid) = native_xid_shared.lock().ok().and_then(|guard| *guard) else {
+            continue;
+        };
+        let pointer = match connection.query_pointer(xid)?.reply() {
+            Ok(pointer) => pointer,
+            Err(_) => continue,
+        };
+        let geometry = match connection.get_geometry(xid)?.reply() {
+            Ok(geometry) => geometry,
+            Err(_) => continue,
+        };
+        let inside_popup = pointer.same_screen
+            && pointer.win_x >= 0
+            && pointer.win_y >= 0
+            && i32::from(pointer.win_x) < i32::from(geometry.width)
+            && i32::from(pointer.win_y) < i32::from(geometry.height);
+        let inside_tray_anchor = last_anchor_shared
+            .lock()
+            .ok()
+            .and_then(|guard| *guard)
+            .is_some_and(|anchor| {
+                point_inside_anchor(i32::from(pointer.root_x), i32::from(pointer.root_y), anchor)
+            });
+        if !inside_popup && !inside_tray_anchor {
+            send(&tx, WorkerCommand::HidePanel);
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn spawn_x11_outside_click_listener(
+    tx: UnboundedSender<WorkerCommand>,
+    panel_visible: Arc<AtomicBool>,
+    native_xid_shared: Arc<Mutex<Option<u32>>>,
+    last_anchor_shared: Arc<Mutex<Option<PanelAnchor>>>,
+) -> Option<thread::JoinHandle<()>> {
+    thread::Builder::new()
+        .name("agents-usage-outside-click".into())
+        .spawn(move || {
+            if let Err(error) = run_x11_outside_click_listener(
+                tx,
+                panel_visible,
+                native_xid_shared,
+                last_anchor_shared,
+            ) {
+                eprintln!("outside-click listener unavailable: {error}");
+            }
+        })
+        .map_err(|error| eprintln!("could not start outside-click listener: {error}"))
+        .ok()
+}
+
 fn panel_position_for_size(anchor: PanelAnchor, panel_w: i32, panel_h: i32) -> slint::PhysicalPosition {
     let panel_w = panel_w.max(1);
     let panel_h = panel_h.max(1);
@@ -1623,6 +1712,14 @@ fn main() -> Result<(), slint::PlatformError> {
             )
         })
         .collect::<Vec<_>>();
+    let restored_usage_count = initial_records
+        .iter()
+        .filter(|record| record.snapshot.is_some())
+        .count();
+    eprintln!(
+        "cache: restored {restored_usage_count}/{} configured account snapshot(s)",
+        initial_records.len()
+    );
 
     let accounts = Arc::new(Mutex::new(initial_records));
     let config = Arc::new(Mutex::new(loaded_config));
@@ -1630,6 +1727,14 @@ fn main() -> Result<(), slint::PlatformError> {
     let native_xid_shared = Arc::new(Mutex::new(None::<u32>));
     let panel_visible = Arc::new(AtomicBool::new(false));
     let (tx, rx) = unbounded_channel::<WorkerCommand>();
+
+    #[cfg(target_os = "linux")]
+    let _outside_click_listener = spawn_x11_outside_click_listener(
+        tx.clone(),
+        panel_visible.clone(),
+        native_xid_shared.clone(),
+        last_anchor_shared.clone(),
+    );
 
     #[cfg(any(target_os = "windows", target_os = "macos"))]
     let _native_tray = match create_native_tray(tx.clone()) {
@@ -1987,6 +2092,8 @@ mod tests {
         infer_panel_edge, move_target, normalized_account_color, normalized_display_name, panel_position_for_size,
         placeholder_record,
     };
+    #[cfg(target_os = "linux")]
+    use super::point_inside_anchor;
     use crate::config::{AccountPreference, AppConfig};
     use crate::domain::UsageSnapshot;
     use std::fs;
@@ -2051,6 +2158,26 @@ mod tests {
         assert_eq!(normalized_account_color(Some("white"), "cyan"), "gray");
         assert_eq!(normalized_account_color(Some("#12abcf"), "cyan"), "#12abcf");
         assert_eq!(normalized_account_color(Some("invalid"), "cyan"), "cyan");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn tray_anchor_hit_testing_excludes_its_right_and_bottom_edges() {
+        let anchor = PanelAnchor {
+            icon_x: 100,
+            icon_y: 20,
+            icon_w: 24,
+            icon_h: 18,
+            monitor_x: 0,
+            monitor_y: 0,
+            monitor_w: 1920,
+            monitor_h: 1080,
+            edge: PanelEdge::Top,
+        };
+        assert!(point_inside_anchor(100, 20, anchor));
+        assert!(point_inside_anchor(123, 37, anchor));
+        assert!(!point_inside_anchor(124, 37, anchor));
+        assert!(!point_inside_anchor(123, 38, anchor));
     }
 
     #[test]

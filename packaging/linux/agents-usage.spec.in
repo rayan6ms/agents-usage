@@ -28,6 +28,9 @@ cp -a %{_stage}/. %{buildroot}/
 
 %changelog
 * Wed Aug 19 2026 Agents Usage maintainers <local@agents-usage.invalid> - @VERSION@-1
+- Improve popup dismissal, cached-startup feedback, and compact provider rendering.
+
+* Wed Aug 19 2026 Agents Usage maintainers <local@agents-usage.invalid> - @VERSION@-1
 - Improve refresh responsiveness, restore cached usage, and expand display settings.
 
 * Mon Aug 17 2026 Agents Usage maintainers <local@agents-usage.invalid> - @VERSION@-1
