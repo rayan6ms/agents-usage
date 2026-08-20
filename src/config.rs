@@ -15,6 +15,10 @@ pub struct AppConfig {
     #[serde(default)]
     pub color_reset_timers: bool,
     #[serde(default)]
+    pub usage_bar_color_mode: UsageBarColorMode,
+    #[serde(default = "default_usage_bar_custom_color")]
+    pub usage_bar_custom_color: String,
+    #[serde(default)]
     pub pin_short_global: bool,
     #[serde(default)]
     pub codex_executable: Option<PathBuf>,
@@ -31,6 +35,8 @@ impl Default for AppConfig {
             blur_emails: false,
             blur_names: false,
             color_reset_timers: false,
+            usage_bar_color_mode: UsageBarColorMode::default(),
+            usage_bar_custom_color: default_usage_bar_custom_color(),
             pin_short_global: false,
             codex_executable: None,
             additional_codex_homes: Vec::new(),
@@ -38,6 +44,36 @@ impl Default for AppConfig {
         }
     }
 }
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UsageBarColorMode {
+    #[default]
+    Account,
+    Remaining,
+    Custom,
+}
+
+impl UsageBarColorMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Account => "account",
+            Self::Remaining => "remaining",
+            Self::Custom => "custom",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "account" => Some(Self::Account),
+            "remaining" => Some(Self::Remaining),
+            "custom" => Some(Self::Custom),
+            _ => None,
+        }
+    }
+}
+
+fn default_usage_bar_custom_color() -> String { "#27bfce".into() }
 
 fn schema_version() -> u32 { 1 }
 
@@ -323,6 +359,23 @@ pin_short = false
         let config: AppConfig = toml::from_str("schema_version = 1\n").unwrap();
         assert!(!config.blur_names);
         assert!(!config.color_reset_timers);
+        assert_eq!(config.usage_bar_color_mode, super::UsageBarColorMode::Account);
+        assert_eq!(config.usage_bar_custom_color, "#27bfce");
+    }
+
+    #[test]
+    fn usage_bar_color_settings_round_trip() {
+        let config = AppConfig {
+            usage_bar_color_mode: super::UsageBarColorMode::Custom,
+            usage_bar_custom_color: "#123abc".into(),
+            ..AppConfig::default()
+        };
+        let encoded = toml::to_string(&config).unwrap();
+        let restored: AppConfig = toml::from_str(&encoded).unwrap();
+        assert_eq!(restored.usage_bar_color_mode, super::UsageBarColorMode::Custom);
+        assert_eq!(restored.usage_bar_custom_color, "#123abc");
+        assert_eq!(super::UsageBarColorMode::parse("remaining"), Some(super::UsageBarColorMode::Remaining));
+        assert_eq!(super::UsageBarColorMode::parse("invalid"), None);
     }
 
     #[test]

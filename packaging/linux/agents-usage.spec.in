@@ -27,6 +27,9 @@ cp -a %{_stage}/. %{buildroot}/
 %doc %{_defaultdocdir}/agents-usage/
 
 %changelog
+* Thu Aug 20 2026 Agents Usage maintainers <local@agents-usage.invalid> - @VERSION@-1
+- Add usage-bar color modes and improve startup refresh and countdown stability.
+
 * Wed Aug 19 2026 Agents Usage maintainers <local@agents-usage.invalid> - @VERSION@-1
 - Improve popup dismissal, cached-startup feedback, and compact provider rendering.
 

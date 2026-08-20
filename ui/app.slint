@@ -465,6 +465,8 @@ component AccountRow inherits Rectangle {
     in property <bool> blur-names: false;
     in property <bool> blur-emails: false;
     in property <bool> color-reset-timers: false;
+    in property <string> usage-bar-color-mode: "account";
+    in property <color> usage-bar-custom-color: #27bfce;
     in property <bool> motion-enabled: true;
     in property <bool> reset-busy: false;
     callback toggle-details(string);
@@ -477,6 +479,16 @@ component AccountRow inherits Rectangle {
     visible: root.account.enabled;
     height: root.account.enabled ? root.account.row-height-px * 1px : 0px;
     background: transparent;
+
+    function usage-bar-color(remaining: float) -> color {
+        if (root.usage-bar-color-mode == "remaining") {
+            return hsv(120 * min(1, max(0, remaining)), 0.78, 0.95);
+        }
+        if (root.usage-bar-color-mode == "custom") {
+            return root.usage-bar-custom-color;
+        }
+        return root.account.accent;
+    }
 
     VerticalLayout {
         width: parent.width;
@@ -568,7 +580,7 @@ component AccountRow inherits Rectangle {
             label: root.account.long-label;
             remaining: root.account.long-remaining;
             percent-text: root.account.long-percent-text;
-            accent: root.account.accent;
+            accent: root.usage-bar-color(root.account.long-remaining);
             reset-text: root.account.long-reset-text;
             reset-color: root.account.long-reset-color;
             show-reset-text: root.account.expanded && root.account.has-long-reset-time;
@@ -596,7 +608,7 @@ component AccountRow inherits Rectangle {
             label: root.account.short-label;
             remaining: root.account.short-remaining;
             percent-text: root.account.short-percent-text;
-            accent: root.account.accent;
+            accent: root.usage-bar-color(root.account.short-remaining);
             reset-text: root.account.short-reset-text;
             reset-color: root.account.short-reset-color;
             show-reset-text: root.account.expanded && root.account.has-short-reset-time;
@@ -616,7 +628,7 @@ component AccountRow inherits Rectangle {
                     label: root.account.short-label;
                     remaining: root.account.short-remaining;
                     percent-text: root.account.short-percent-text;
-                    accent: root.account.accent;
+                    accent: root.usage-bar-color(root.account.short-remaining);
                     reset-text: root.account.short-reset-text;
                     reset-color: root.account.short-reset-color;
                     show-reset-text: root.account.has-short-reset-time;
@@ -870,6 +882,81 @@ component HsvColorPicker inherits Rectangle {
     }
 }
 
+component UsageBarModeButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> selected: false;
+    callback clicked();
+    height: 27px;
+    horizontal-stretch: 1;
+    border-radius: 5px;
+    border-width: 1px;
+    border-color: root.selected ? Palette.foreground : Palette.border;
+    background: root.selected ? Palette.alternate-background : area.has-hover ? #ffffff0b : transparent;
+    accessible-role: button;
+    accessible-label: root.label + " usage bar colors";
+    accessible-checked: root.selected;
+    accessible-action-default => { root.clicked(); }
+
+    Text {
+        text: root.label;
+        color: Palette.foreground;
+        font-size: 9px;
+        font-weight: root.selected ? 600 : 400;
+        opacity: root.selected ? 0.95 : 0.62;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    area := TouchArea { clicked => { root.clicked(); } }
+}
+
+component UsageBarColorSettings inherits Rectangle {
+    in property <string> mode: "account";
+    in property <color> custom-color: #27bfce;
+    callback mode-changed(string);
+    callback custom-color-changed(color);
+    in-out property <float> picker-hue: root.custom-color.to-hsv().hue;
+    in-out property <float> picker-saturation: root.custom-color.to-hsv().saturation;
+    in-out property <float> picker-value: root.custom-color.to-hsv().value;
+    height: root.mode == "custom" ? 158px : 64px;
+    background: transparent;
+
+    VerticalLayout {
+        spacing: 3px;
+        Text {
+            height: 20px;
+            text: "Usage bar colors";
+            color: Palette.foreground;
+            font-size: 11px;
+            vertical-alignment: bottom;
+        }
+        HorizontalLayout {
+            height: 31px;
+            spacing: 5px;
+            UsageBarModeButton {
+                label: "Account";
+                selected: root.mode == "account";
+                clicked => { root.mode-changed("account"); }
+            }
+            UsageBarModeButton {
+                label: "Green → red";
+                selected: root.mode == "remaining";
+                clicked => { root.mode-changed("remaining"); }
+            }
+            UsageBarModeButton {
+                label: "Custom";
+                selected: root.mode == "custom";
+                clicked => { root.mode-changed("custom"); }
+            }
+        }
+        if root.mode == "custom": HsvColorPicker {
+            hue: root.picker-hue;
+            saturation: root.picker-saturation;
+            value: root.picker-value;
+            picked(value) => { root.custom-color-changed(value); }
+        }
+    }
+}
+
 component AccountSettings inherits Rectangle {
     in property <AccountView> account;
     in property <[ColorChoice]> colors;
@@ -1026,6 +1113,8 @@ export component MainWindow inherits Window {
     in-out property <bool> blur-names: false;
     in-out property <bool> blur-emails: false;
     in-out property <bool> color-reset-timers: false;
+    in-out property <string> usage-bar-color-mode: "account";
+    in-out property <color> usage-bar-custom-color: #27bfce;
     in-out property <bool> pin-short-global: false;
     in-out property <bool> motion-enabled: true;
     in-out property <bool> refreshing: false;
@@ -1049,6 +1138,8 @@ export component MainWindow inherits Window {
     callback blur-emails-changed(bool);
     callback blur-names-changed(bool);
     callback color-reset-timers-changed(bool);
+    callback usage-bar-color-mode-changed(string);
+    callback usage-bar-custom-color-changed(color);
     callback pin-short-global-changed(bool);
     callback account-enabled-changed(string, bool);
     callback account-pin-short-changed(string, bool);
@@ -1152,6 +1243,8 @@ export component MainWindow inherits Window {
                     blur-names: root.blur-names;
                     blur-emails: root.blur-emails;
                     color-reset-timers: root.color-reset-timers;
+                    usage-bar-color-mode: root.usage-bar-color-mode;
+                    usage-bar-custom-color: root.usage-bar-custom-color;
                     motion-enabled: root.motion-enabled;
                     reset-busy: root.reset-busy;
                     toggle-details(id) => { root.account-toggle-details(id); }
@@ -1233,6 +1326,12 @@ export component MainWindow inherits Window {
                             subtitle: "Show available short windows below weekly usage";
                             checked: root.pin-short-global;
                             changed(value) => { root.pin-short-global-changed(value); }
+                        }
+                        UsageBarColorSettings {
+                            mode: root.usage-bar-color-mode;
+                            custom-color: root.usage-bar-custom-color;
+                            mode-changed(value) => { root.usage-bar-color-mode-changed(value); }
+                            custom-color-changed(value) => { root.usage-bar-custom-color-changed(value); }
                         }
                         Text {
                             height: 22px;

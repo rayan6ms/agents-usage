@@ -56,12 +56,12 @@ assert 'RefreshIfStale' in main and 'OPEN_REFRESH_FRESHNESS' in main
 assert 'launch_mode(std::env::args_os().skip(1))' in main
 assert 'activate_existing_instance_async(open_on_start)' in main
 assert 'STARTUP_REFRESH_DELAY' in main
-assert 'Duration::from_secs(10)' in main
+assert 'Duration::from_secs(2)' in main
 assert 'INTERACTIVE_REFRESH_CONCURRENCY: usize = 8' in main
-assert 'STARTUP_REFRESH_CONCURRENCY: usize = 2' in main
+assert 'STARTUP_REFRESH_CONCURRENCY: usize = 8' in main
 assert 'load_usage_cache' in main and 'save_usage_cache' in main
 assert 'CheckPopupFocus' in main
-assert 'XinputRawButtonPress' in main and 'point_inside_anchor' in main
+assert 'XinputRawButtonPress' not in main
 assert 'save_pending_reset' in main and 'idempotency_key' in main
 assert 'revealAndHold(DTP_TEMPORARY_HOLD' in ext and 'release?.(DTP_TEMPORARY_HOLD)' in ext
 assert 'for account[index] in root.accounts' in ui
@@ -69,6 +69,8 @@ assert 'account-name-changed' in ui and 'account-color-changed' in ui
 assert 'account-custom-color-changed' in ui and 'HsvColorPicker' in ui
 assert 'blur-names-changed' in ui and 'color-reset-timers-changed' in ui
 assert 'root.provider-id == "openai": Path' in ui
+assert 'UsageBarColorSettings' in ui and 'usage-bar-color-mode-changed' in ui
+assert 'Green → red' in ui and 'usage-bar-custom-color-changed' in ui
 assert 'account-move-requested' in ui
 assert 'settings-height-px' in ui
 assert 'vertical-scrollbar-policy: as-needed' in ui

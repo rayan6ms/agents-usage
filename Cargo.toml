@@ -1,6 +1,6 @@
 [package]
 name = "agents-usage"
-version = "0.2.5"
+version = "0.2.6"
 edition = "2024"
 rust-version = "1.92"
 publish = false
@@ -35,7 +35,7 @@ thiserror = "2"
 [target.'cfg(target_os = "linux")'.dependencies]
 ksni = "0.3.6"
 raw-window-handle = "0.6"
-x11rb = { version = "0.13.2", features = ["xinput"] }
+x11rb = "0.13.2"
 zbus = { version = "5", default-features = false, features = ["tokio"] }
 
 [target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]

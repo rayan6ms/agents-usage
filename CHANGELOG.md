@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.6 — 2026-08-20
+
+- Added account, remaining-quota gradient, and shared custom usage-bar color modes.
+- Reduced the background startup refresh delay and made startup account checks concurrent.
+- Stabilized reset countdown boundaries and removed redundant startup renders.
+- Removed the ineffective global XInput outside-click listener.
+
 ## 0.2.5 — 2026-08-19
 
 - Dismiss the Linux popup when clicking the bare desktop as well as another window.

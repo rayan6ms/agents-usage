@@ -7,7 +7,7 @@ mod discovery;
 mod domain;
 mod ui_model;
 
-use crate::config::{AppConfig, AccountPreference};
+use crate::config::{AppConfig, AccountPreference, UsageBarColorMode};
 use crate::domain::{AccountRecord, CachedUsage, PendingReset, UsageSnapshot};
 use slint::{CloseRequestResponse, ComponentHandle};
 use std::collections::{HashMap, HashSet};
@@ -30,10 +30,10 @@ const DBUS_PATH: &str = "/io/github/agentsusagetray/App";
 const PANEL_GAP_PX: i32 = 6;
 const SCREEN_MARGIN_PX: i32 = 5;
 const OPEN_REFRESH_FRESHNESS: Duration = Duration::from_secs(5);
-const STARTUP_REFRESH_DELAY: Duration = Duration::from_secs(10);
+const STARTUP_REFRESH_DELAY: Duration = Duration::from_secs(2);
 const MAX_RPC_CONCURRENCY: usize = 8;
 const INTERACTIVE_REFRESH_CONCURRENCY: usize = 8;
-const STARTUP_REFRESH_CONCURRENCY: usize = 2;
+const STARTUP_REFRESH_CONCURRENCY: usize = 8;
 const INTERACTIVE_DISCOVERY_CONCURRENCY: usize = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -446,95 +446,6 @@ fn x11_popup_has_input_focus(xid: u32) -> bool {
         .is_some_and(|reply| reply.focus == xid)
 }
 
-#[cfg(target_os = "linux")]
-fn point_inside_anchor(x: i32, y: i32, anchor: PanelAnchor) -> bool {
-    x >= anchor.icon_x
-        && x < anchor.icon_x.saturating_add(anchor.icon_w)
-        && y >= anchor.icon_y
-        && y < anchor.icon_y.saturating_add(anchor.icon_h)
-}
-
-#[cfg(target_os = "linux")]
-fn run_x11_outside_click_listener(
-    tx: UnboundedSender<WorkerCommand>,
-    panel_visible: Arc<AtomicBool>,
-    native_xid_shared: Arc<Mutex<Option<u32>>>,
-    last_anchor_shared: Arc<Mutex<Option<PanelAnchor>>>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    use x11rb::connection::Connection as _;
-    use x11rb::protocol::Event;
-    use x11rb::protocol::xinput::{ConnectionExt as _, Device, EventMask, XIEventMask};
-    use x11rb::protocol::xproto::ConnectionExt as _;
-
-    let (connection, screen_index) = x11rb::connect(None)?;
-    let root = connection.setup().roots[screen_index].root;
-    connection
-        .xinput_xi_select_events(root, &[EventMask {
-            deviceid: Device::ALL_MASTER.into(),
-            mask: vec![XIEventMask::RAW_BUTTON_PRESS],
-        }])?
-        .check()?;
-    connection.flush()?;
-
-    loop {
-        let event = connection.wait_for_event()?;
-        if !matches!(event, Event::XinputRawButtonPress(_))
-            || !panel_visible.load(Ordering::SeqCst)
-        {
-            continue;
-        }
-        let Some(xid) = native_xid_shared.lock().ok().and_then(|guard| *guard) else {
-            continue;
-        };
-        let pointer = match connection.query_pointer(xid)?.reply() {
-            Ok(pointer) => pointer,
-            Err(_) => continue,
-        };
-        let geometry = match connection.get_geometry(xid)?.reply() {
-            Ok(geometry) => geometry,
-            Err(_) => continue,
-        };
-        let inside_popup = pointer.same_screen
-            && pointer.win_x >= 0
-            && pointer.win_y >= 0
-            && i32::from(pointer.win_x) < i32::from(geometry.width)
-            && i32::from(pointer.win_y) < i32::from(geometry.height);
-        let inside_tray_anchor = last_anchor_shared
-            .lock()
-            .ok()
-            .and_then(|guard| *guard)
-            .is_some_and(|anchor| {
-                point_inside_anchor(i32::from(pointer.root_x), i32::from(pointer.root_y), anchor)
-            });
-        if !inside_popup && !inside_tray_anchor {
-            send(&tx, WorkerCommand::HidePanel);
-        }
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn spawn_x11_outside_click_listener(
-    tx: UnboundedSender<WorkerCommand>,
-    panel_visible: Arc<AtomicBool>,
-    native_xid_shared: Arc<Mutex<Option<u32>>>,
-    last_anchor_shared: Arc<Mutex<Option<PanelAnchor>>>,
-) -> Option<thread::JoinHandle<()>> {
-    thread::Builder::new()
-        .name("agents-usage-outside-click".into())
-        .spawn(move || {
-            if let Err(error) = run_x11_outside_click_listener(
-                tx,
-                panel_visible,
-                native_xid_shared,
-                last_anchor_shared,
-            ) {
-                eprintln!("outside-click listener unavailable: {error}");
-            }
-        })
-        .map_err(|error| eprintln!("could not start outside-click listener: {error}"))
-        .ok()
-}
-
 fn panel_position_for_size(anchor: PanelAnchor, panel_w: i32, panel_h: i32) -> slint::PhysicalPosition {
     let panel_w = panel_w.max(1);
     let panel_h = panel_h.max(1);
@@ -724,6 +635,8 @@ fn render_ui(
     ui.set_blur_emails(cfg.blur_emails);
     ui.set_blur_names(cfg.blur_names);
     ui.set_color_reset_timers(cfg.color_reset_timers);
+    ui.set_usage_bar_color_mode(cfg.usage_bar_color_mode.as_str().into());
+    ui.set_usage_bar_custom_color(ui_model::color_from_name(&cfg.usage_bar_custom_color));
     ui.set_pin_short_global(cfg.pin_short_global);
     ui.set_accounts_summary(format!("{} discovered · refresh also checks for new Codex homes", records.len()).into());
     if let Some(text) = empty_text { ui.set_empty_text(text.into()); }
@@ -1317,8 +1230,6 @@ fn spawn_worker(
                     None
                 };
 
-                schedule_render(ui.clone(), accounts.clone(), config.clone(), last_anchor_shared.clone(), None);
-
                 match (codex_path.clone(), config::load_pending_reset()) {
                     (Some(codex_path), Ok(Some(pending))) => {
                         tokio::spawn(reconcile_pending_reset(
@@ -1348,6 +1259,9 @@ fn spawn_worker(
                 let tick_tx = tx.clone();
                 tokio::spawn(async move {
                     let mut interval = tokio::time::interval(Duration::from_secs(60));
+                    // `interval` ticks immediately once; the cached state was already
+                    // rendered during startup, so consume that tick without redrawing.
+                    interval.tick().await;
                     loop {
                         interval.tick().await;
                         if tick_tx.send(WorkerCommand::Tick).is_err() { break; }
@@ -1728,14 +1642,6 @@ fn main() -> Result<(), slint::PlatformError> {
     let panel_visible = Arc::new(AtomicBool::new(false));
     let (tx, rx) = unbounded_channel::<WorkerCommand>();
 
-    #[cfg(target_os = "linux")]
-    let _outside_click_listener = spawn_x11_outside_click_listener(
-        tx.clone(),
-        panel_visible.clone(),
-        native_xid_shared.clone(),
-        last_anchor_shared.clone(),
-    );
-
     #[cfg(any(target_os = "windows", target_os = "macos"))]
     let _native_tray = match create_native_tray(tx.clone()) {
         Ok(tray) => Some(tray),
@@ -1921,6 +1827,38 @@ fn main() -> Result<(), slint::PlatformError> {
         let config_arc = config.clone();
         let last_anchor = last_anchor_shared.clone();
         let tx = tx.clone();
+        ui.on_usage_bar_color_mode_changed(move |value| {
+            let Some(mode) = UsageBarColorMode::parse(value.as_str()) else { return; };
+            if let Ok(mut cfg) = config_arc.lock() { cfg.usage_bar_color_mode = mode; }
+            if let Some(ui) = ui_weak.upgrade() {
+                render_ui(&ui, &accounts, &config_arc, &last_anchor, None);
+            }
+            send(&tx, WorkerCommand::PersistSettings);
+        });
+    }
+    {
+        let ui_weak = ui.as_weak();
+        let accounts = accounts.clone();
+        let config_arc = config.clone();
+        let last_anchor = last_anchor_shared.clone();
+        let tx = tx.clone();
+        ui.on_usage_bar_custom_color_changed(move |value| {
+            if let Ok(mut cfg) = config_arc.lock() {
+                cfg.usage_bar_custom_color = color_hex(value);
+                cfg.usage_bar_color_mode = UsageBarColorMode::Custom;
+            }
+            if let Some(ui) = ui_weak.upgrade() {
+                render_ui(&ui, &accounts, &config_arc, &last_anchor, None);
+            }
+            send(&tx, WorkerCommand::PersistSettings);
+        });
+    }
+    {
+        let ui_weak = ui.as_weak();
+        let accounts = accounts.clone();
+        let config_arc = config.clone();
+        let last_anchor = last_anchor_shared.clone();
+        let tx = tx.clone();
         ui.on_pin_short_global_changed(move |value| {
             if value {
                 if let Ok(mut records) = accounts.lock() {
@@ -2092,8 +2030,6 @@ mod tests {
         infer_panel_edge, move_target, normalized_account_color, normalized_display_name, panel_position_for_size,
         placeholder_record,
     };
-    #[cfg(target_os = "linux")]
-    use super::point_inside_anchor;
     use crate::config::{AccountPreference, AppConfig};
     use crate::domain::UsageSnapshot;
     use std::fs;
@@ -2158,26 +2094,6 @@ mod tests {
         assert_eq!(normalized_account_color(Some("white"), "cyan"), "gray");
         assert_eq!(normalized_account_color(Some("#12abcf"), "cyan"), "#12abcf");
         assert_eq!(normalized_account_color(Some("invalid"), "cyan"), "cyan");
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn tray_anchor_hit_testing_excludes_its_right_and_bottom_edges() {
-        let anchor = PanelAnchor {
-            icon_x: 100,
-            icon_y: 20,
-            icon_w: 24,
-            icon_h: 18,
-            monitor_x: 0,
-            monitor_y: 0,
-            monitor_w: 1920,
-            monitor_h: 1080,
-            edge: PanelEdge::Top,
-        };
-        assert!(point_inside_anchor(100, 20, anchor));
-        assert!(point_inside_anchor(123, 37, anchor));
-        assert!(!point_inside_anchor(124, 37, anchor));
-        assert!(!point_inside_anchor(123, 38, anchor));
     }
 
     #[test]

@@ -181,15 +181,19 @@ fn window_label(duration_mins: Option<u64>, fallback: Option<&str>, long: bool) 
 
 fn format_countdown(timestamp: i64, now: i64) -> String {
     let seconds = (timestamp - now).max(0);
-    let days = seconds / 86_400;
-    let hours = (seconds % 86_400) / 3_600;
-    let minutes = (seconds % 3_600) / 60;
-    if days > 0 {
+    if seconds == 0 { return "0m".into(); }
+    let total_minutes = (seconds + 59) / 60;
+    let total_hours = (seconds + 3_599) / 3_600;
+    if total_hours >= 24 {
+        let days = total_hours / 24;
+        let hours = total_hours % 24;
         format!("{days}d {hours}h")
-    } else if hours > 0 {
+    } else if total_minutes >= 60 {
+        let hours = total_minutes / 60;
+        let minutes = total_minutes % 60;
         format!("{hours}h {minutes:02}m")
     } else {
-        format!("{minutes}m")
+        format!("{total_minutes}m")
     }
 }
 
@@ -271,7 +275,7 @@ pub const ACCOUNT_COLORS: [&str; 10] = [
 
 #[cfg(test)]
 mod tests {
-    use super::{ACCOUNT_COLORS, color_from_name, is_account_color, mask_account_name, reset_timer_color};
+    use super::{ACCOUNT_COLORS, color_from_name, format_countdown, is_account_color, mask_account_name, reset_timer_color};
     use crate::domain::RateWindow;
 
     #[test]
@@ -317,5 +321,14 @@ mod tests {
         let near = reset_timer_color(&short_near, 0);
         assert!(far.red() > far.green());
         assert!(near.green() > near.red());
+    }
+
+    #[test]
+    fn countdown_rounds_up_without_flipping_at_unit_boundaries() {
+        assert_eq!(format_countdown(7 * 24 * 60 * 60 - 1, 0), "7d 0h");
+        assert_eq!(format_countdown(6 * 24 * 60 * 60 + 23 * 60 * 60, 0), "6d 23h");
+        assert_eq!(format_countdown(5 * 60 * 60 - 1, 0), "5h 00m");
+        assert_eq!(format_countdown(1, 0), "1m");
+        assert_eq!(format_countdown(0, 0), "0m");
     }
 }
