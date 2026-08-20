@@ -18,7 +18,7 @@ Launch Agents Usage, then click its tray icon to open the usage panel. The app d
 
 Settings let you rename, recolor, reorder, disable, and expand accounts. You can blur account names and emails, choose preset or custom account colors, and optionally color reset timers from red toward green as the reset approaches. Usage bars can follow each account color, shift from green to red as quota is spent, or share one custom color.
 
-Refreshes update accounts independently, preserve the last valid data when one account fails, and check for newly added Codex homes. The last valid usage is also cached locally so the panel has useful data immediately after startup while a fresh check runs.
+Refreshes update accounts independently, preserve the last valid data when one account fails, and check for newly added Codex homes. The last valid usage is also cached locally so the panel has useful data immediately; a fresh check runs when the panel is opened or Refresh is pressed.
 
 ## Current limitations
 

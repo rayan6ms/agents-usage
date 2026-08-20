@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.7 — 2026-08-20
+
+- Reconcile moved Codex homes by normalized account email while preserving account settings and ordering.
+- Ignore stale homes without current Codex authentication evidence and deduplicate account, cache, and refresh state.
+- Fetch fresh usage only after the panel is opened or Refresh is requested, avoiding hidden startup traffic.
+- Keep long account lists reachable with dashboard scrolling and add breathing room above Settings.
+- Use the standard StatusNotifier tray fallback on non-GNOME Linux desktops.
+
 ## 0.2.6 — 2026-08-20
 
 - Added account, remaining-quota gradient, and shared custom usage-bar color modes.

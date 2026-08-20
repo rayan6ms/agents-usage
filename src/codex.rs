@@ -191,6 +191,23 @@ pub async fn read_openai_account(codex: &Path, codex_home: &Path) -> Result<Usag
     Err(last_error.expect("read retry loop always records an error before exhaustion"))
 }
 
+pub async fn read_openai_identity(
+    codex: &Path,
+    codex_home: &Path,
+) -> Result<Option<String>, CodexError> {
+    let mut session = AppServerSession::start(codex, codex_home).await?;
+    let result = async {
+        session.initialize().await?;
+        let account = session
+            .request(1, "account/read", Some(json!({"refreshToken": false})))
+            .await?;
+        Ok(account_email(&account))
+    }
+    .await;
+    session.shutdown().await;
+    result
+}
+
 async fn read_openai_account_once(codex: &Path, codex_home: &Path) -> Result<UsageSnapshot, CodexError> {
     let mut session = AppServerSession::start(codex, codex_home).await?;
     let result = async {
@@ -361,11 +378,7 @@ impl AppServerSession {
 }
 
 fn normalize_snapshot(account: Value, limits: Value) -> Result<UsageSnapshot, CodexError> {
-    let account_obj = account.get("account").and_then(Value::as_object);
-    let email = account_obj
-        .and_then(|value| value.get("email"))
-        .and_then(Value::as_str)
-        .map(str::to_string);
+    let email = account_email(&account);
     let (bucket_name, windows) = normalize_windows(&limits);
     if windows.is_empty() {
         return Err(CodexError::Protocol("account/rateLimits/read returned no usable windows".into()));
@@ -379,6 +392,15 @@ fn normalize_snapshot(account: Value, limits: Value) -> Result<UsageSnapshot, Co
         reset_available_count,
         reset_credits,
     })
+}
+
+fn account_email(account: &Value) -> Option<String> {
+    account
+        .get("account")
+        .and_then(Value::as_object)
+        .and_then(|value| value.get("email"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
 }
 
 fn normalize_windows(result: &Value) -> (Option<String>, Vec<RateWindow>) {
@@ -441,7 +463,8 @@ fn normalize_reset_credits(result: &Value) -> (u32, Vec<ResetCredit>) {
 
 #[cfg(test)]
 mod tests {
-    use super::CodexError;
+    use super::{account_email, CodexError};
+    use serde_json::json;
 
     fn rpc(message: &str) -> CodexError {
         CodexError::Rpc {
@@ -469,5 +492,21 @@ mod tests {
         let error = rpc("503 Service Unavailable: retry later");
         assert!(error.is_transient_read());
         assert_eq!(error.user_message(), "Temporary service error · keeping last data");
+    }
+
+    #[test]
+    fn account_identity_is_available_without_a_usage_response() {
+        let account = json!({
+            "account": {
+                "type": "chatgpt",
+                "email": "Moved.Account@Example.com",
+                "planType": "plus"
+            }
+        });
+
+        assert_eq!(
+            account_email(&account).as_deref(),
+            Some("Moved.Account@Example.com")
+        );
     }
 }

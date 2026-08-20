@@ -81,6 +81,8 @@ fn schema_version() -> u32 { 1 }
 pub struct AccountPreference {
     pub home: PathBuf,
     #[serde(default)]
+    pub identity_email: Option<String>,
+    #[serde(default)]
     pub display_name: Option<String>,
     #[serde(default)]
     pub color: Option<String>,
@@ -98,6 +100,7 @@ impl Default for AccountPreference {
     fn default() -> Self {
         Self {
             home: PathBuf::new(),
+            identity_email: None,
             display_name: None,
             color: None,
             enabled: true,
@@ -340,6 +343,7 @@ pin_short = false
         .unwrap();
 
         assert!(!preference.expanded);
+        assert!(preference.identity_email.is_none());
     }
 
     #[test]

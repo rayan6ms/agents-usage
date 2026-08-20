@@ -55,10 +55,9 @@ assert 'discover_new_accounts' in main and 'refresh_known_accounts' in main
 assert 'RefreshIfStale' in main and 'OPEN_REFRESH_FRESHNESS' in main
 assert 'launch_mode(std::env::args_os().skip(1))' in main
 assert 'activate_existing_instance_async(open_on_start)' in main
-assert 'STARTUP_REFRESH_DELAY' in main
-assert 'Duration::from_secs(2)' in main
+assert 'RefreshAtStartup' not in main
+assert 'STARTUP_REFRESH_DELAY' not in main
 assert 'INTERACTIVE_REFRESH_CONCURRENCY: usize = 8' in main
-assert 'STARTUP_REFRESH_CONCURRENCY: usize = 8' in main
 assert 'load_usage_cache' in main and 'save_usage_cache' in main
 assert 'CheckPopupFocus' in main
 assert 'XinputRawButtonPress' not in main
@@ -74,6 +73,8 @@ assert 'Green → red' in ui and 'usage-bar-custom-color-changed' in ui
 assert 'account-move-requested' in ui
 assert 'settings-height-px' in ui
 assert 'vertical-scrollbar-policy: as-needed' in ui
+assert 'if root.enabled-account-count > 0: ScrollView' in ui
+assert 'padding-top: 8px' in ui
 assert 'Personal' not in ui and 'team@anthropic.example' not in ui
 assert 'StatusNotifierTray' in main and 'create_native_tray' in main
 assert 'MoveFileExW' in (root / 'src/config.rs').read_text()

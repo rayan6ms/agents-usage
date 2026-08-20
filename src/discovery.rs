@@ -35,7 +35,7 @@ pub fn candidate_codex_homes(config: &AppConfig) -> Vec<PathBuf> {
     dedupe_existing_dirs(raw)
 }
 
-fn is_marked_codex_home(path: &Path) -> bool {
+pub fn is_marked_codex_home(path: &Path) -> bool {
     path.is_dir() && path.join("auth.json").is_file()
 }
 
@@ -54,7 +54,7 @@ fn dedupe_existing_dirs(paths: Vec<PathBuf>) -> Vec<PathBuf> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
     for path in paths {
-        if !path.is_dir() {
+        if !is_marked_codex_home(&path) {
             continue;
         }
         let canonical = canonicalish(&path);
@@ -71,7 +71,7 @@ fn canonicalish(path: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::is_marked_codex_home;
+    use super::{dedupe_existing_dirs, is_marked_codex_home};
     use std::fs;
 
     #[test]
@@ -85,6 +85,10 @@ mod tests {
 
         assert!(is_marked_codex_home(&arbitrary));
         assert!(!is_marked_codex_home(&misleading));
+        assert_eq!(
+            dedupe_existing_dirs(vec![misleading, arbitrary.clone()]),
+            vec![arbitrary]
+        );
 
         fs::remove_dir_all(root).unwrap();
     }

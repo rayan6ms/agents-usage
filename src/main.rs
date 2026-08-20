@@ -30,10 +30,8 @@ const DBUS_PATH: &str = "/io/github/agentsusagetray/App";
 const PANEL_GAP_PX: i32 = 6;
 const SCREEN_MARGIN_PX: i32 = 5;
 const OPEN_REFRESH_FRESHNESS: Duration = Duration::from_secs(5);
-const STARTUP_REFRESH_DELAY: Duration = Duration::from_secs(2);
 const MAX_RPC_CONCURRENCY: usize = 8;
 const INTERACTIVE_REFRESH_CONCURRENCY: usize = 8;
-const STARTUP_REFRESH_CONCURRENCY: usize = 8;
 const INTERACTIVE_DISCOVERY_CONCURRENCY: usize = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -99,7 +97,6 @@ enum WorkerCommand {
     ToggleAtPoint { x: i32, y: i32, icon_w: i32, icon_h: i32 },
     Refresh,
     RefreshIfStale,
-    RefreshAtStartup,
     PersistSettings,
     ConsumeReset { account_id: String, credit_id: String },
     HidePanel,
@@ -303,8 +300,13 @@ impl ksni::Tray for StatusNotifierTray {
 
 #[cfg(target_os = "linux")]
 fn should_use_status_notifier() -> bool {
-    let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default().to_ascii_lowercase();
-    desktop.contains("kde") || desktop.contains("plasma")
+    let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
+    desktop_uses_status_notifier(&desktop)
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn desktop_uses_status_notifier(desktop: &str) -> bool {
+    !desktop.to_ascii_lowercase().contains("gnome")
 }
 
 #[cfg(any(target_os = "windows", target_os = "macos"))]
@@ -712,6 +714,163 @@ fn normalized_display_name(value: &str) -> Option<String> {
     }
 }
 
+fn normalized_account_email(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_ascii_lowercase)
+}
+
+fn reconcile_preference_for_snapshot(
+    config: &mut AppConfig,
+    home: &Path,
+    email: Option<&str>,
+) {
+    let identity = normalized_account_email(email);
+    let path_index = config
+        .accounts
+        .iter()
+        .position(|pref| canonical_id(&pref.home) == canonical_id(home));
+    let identity_indices = identity
+        .as_deref()
+        .map(|identity| {
+            config
+                .accounts
+                .iter()
+                .enumerate()
+                .filter_map(|(index, pref)| {
+                    (normalized_account_email(pref.identity_email.as_deref()).as_deref() == Some(identity))
+                        .then_some(index)
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    let chosen_index = identity_indices.first().copied().or(path_index);
+    let Some(chosen_index) = chosen_index else {
+        config.accounts.push(AccountPreference {
+            home: home.to_path_buf(),
+            identity_email: identity,
+            ..AccountPreference::default()
+        });
+        return;
+    };
+
+    let mut chosen = config.accounts[chosen_index].clone();
+    chosen.home = home.to_path_buf();
+    chosen.identity_email = identity;
+    let mut remove = identity_indices.into_iter().collect::<HashSet<_>>();
+    if let Some(path_index) = path_index { remove.insert(path_index); }
+    remove.remove(&chosen_index);
+    config.accounts = config
+        .accounts
+        .drain(..)
+        .enumerate()
+        .filter_map(|(index, pref)| {
+            if index == chosen_index {
+                Some(chosen.clone())
+            } else if remove.contains(&index) {
+                None
+            } else {
+                Some(pref)
+            }
+        })
+        .collect();
+}
+
+fn reconcile_cached_accounts(
+    config: &mut AppConfig,
+    cache: Vec<CachedUsage>,
+) -> (Vec<CachedUsage>, bool) {
+    let original_config = config.clone();
+
+    for pref in &mut config.accounts {
+        let cached_email = cache
+            .iter()
+            .find(|cached| canonical_id(&cached.home) == canonical_id(&pref.home))
+            .and_then(|cached| normalized_account_email(cached.snapshot.email.as_deref()));
+        pref.identity_email = cached_email
+            .or_else(|| normalized_account_email(pref.identity_email.as_deref()));
+    }
+
+    let identities = config
+        .accounts
+        .iter()
+        .filter_map(|pref| normalized_account_email(pref.identity_email.as_deref()))
+        .collect::<Vec<_>>();
+    let mut reconciled = HashSet::new();
+    for identity in identities {
+        if !reconciled.insert(identity.clone()) { continue; }
+        let matching = config
+            .accounts
+            .iter()
+            .enumerate()
+            .filter_map(|(index, pref)| {
+                (normalized_account_email(pref.identity_email.as_deref()).as_deref() == Some(identity.as_str()))
+                    .then_some(index)
+            })
+            .collect::<Vec<_>>();
+        if matching.len() < 2 { continue; }
+
+        // Discovery appends a newly seen path. Keep the original account's
+        // preferences and ordering, but point it at the newest path that still exists.
+        let current_home = matching
+            .iter()
+            .rev()
+            .find_map(|index| discovery::is_marked_codex_home(&config.accounts[*index].home).then(|| config.accounts[*index].home.clone()))
+            .unwrap_or_else(|| config.accounts[*matching.last().expect("duplicate group is non-empty")].home.clone());
+        let chosen_index = matching[0];
+        let mut chosen = config.accounts[chosen_index].clone();
+        chosen.home = current_home;
+        chosen.identity_email = Some(identity);
+        let remove = matching.into_iter().skip(1).collect::<HashSet<_>>();
+        config.accounts = config
+            .accounts
+            .drain(..)
+            .enumerate()
+            .filter_map(|(index, pref)| {
+                if index == chosen_index {
+                    Some(chosen.clone())
+                } else if remove.contains(&index) {
+                    None
+                } else {
+                    Some(pref)
+                }
+            })
+            .collect();
+    }
+
+    let reconciled_cache = config
+        .accounts
+        .iter()
+        .filter_map(|pref| {
+            cache
+                .iter()
+                .rev()
+                .find(|cached| canonical_id(&cached.home) == canonical_id(&pref.home))
+                .or_else(|| {
+                    let identity = normalized_account_email(pref.identity_email.as_deref())?;
+                    cache.iter().rev().find(|cached| {
+                        normalized_account_email(cached.snapshot.email.as_deref()).as_deref()
+                            == Some(identity.as_str())
+                    })
+                })
+                .map(|cached| CachedUsage {
+                    home: pref.home.clone(),
+                    snapshot: cached.snapshot.clone(),
+                })
+        })
+        .collect::<Vec<_>>();
+    let changed = *config != original_config
+        || reconciled_cache.len() != cache.len()
+        || reconciled_cache.iter().zip(&cache).any(|(left, right)| {
+            canonical_id(&left.home) != canonical_id(&right.home)
+                || normalized_account_email(left.snapshot.email.as_deref())
+                    != normalized_account_email(right.snapshot.email.as_deref())
+        });
+    (reconciled_cache, changed)
+}
+
 fn color_hex(color: slint::Color) -> String {
     format!("#{:02x}{:02x}{:02x}", color.red(), color.green(), color.blue())
 }
@@ -747,6 +906,7 @@ fn record_from_snapshot(
     color_index: usize,
 ) -> AccountRecord {
     let id = canonical_id(&home);
+    reconcile_preference_for_snapshot(config, &home, snapshot.email.as_deref());
     let discovered_name = snapshot
         .email
         .as_deref()
@@ -784,7 +944,7 @@ fn placeholder_record(
     expand_globally: bool,
     cached_snapshot: Option<UsageSnapshot>,
 ) -> Option<AccountRecord> {
-    if !pref.home.is_dir() { return None; }
+    if !discovery::is_marked_codex_home(&pref.home) { return None; }
     Some(AccountRecord {
         id: canonical_id(&pref.home),
         home: pref.home.clone(),
@@ -832,6 +992,7 @@ fn apply_snapshot(
     config: &Arc<Mutex<AppConfig>>,
 ) {
     let id = canonical_id(&home);
+    let identity = normalized_account_email(snapshot.email.as_deref());
     let color_index = color_index_for_home(&home);
     let mut new_record = {
         let mut cfg = match config.lock() {
@@ -849,15 +1010,30 @@ fn apply_snapshot(
     };
 
     if let Ok(mut records) = accounts.lock() {
-        if let Some(existing) = records.iter_mut().find(|record| record.id == id) {
+        let existing_index = records.iter().position(|record| {
+            record.id == id
+                || identity.as_deref().is_some_and(|identity| {
+                    normalized_account_email(record.snapshot.as_ref().and_then(|snapshot| snapshot.email.as_deref()))
+                        .as_deref()
+                        == Some(identity)
+                })
+        });
+        if let Some(index) = existing_index {
+            let existing = records.remove(index);
             new_record.expanded = existing.expanded;
             new_record.name_revealed = existing.name_revealed;
             new_record.email_revealed = existing.email_revealed;
-            new_record.confirm_credit_id = existing.confirm_credit_id.clone();
-            *existing = new_record;
-        } else {
-            records.push(new_record);
+            new_record.confirm_credit_id = existing.confirm_credit_id;
         }
+        records.retain(|record| {
+            record.id != id
+                && !identity.as_deref().is_some_and(|identity| {
+                    normalized_account_email(record.snapshot.as_ref().and_then(|snapshot| snapshot.email.as_deref()))
+                        .as_deref()
+                        == Some(identity)
+                })
+        });
+        records.push(new_record);
         let order = config
             .lock()
             .map(|cfg| {
@@ -897,10 +1073,17 @@ async fn refresh_known_accounts(
     let targets = accounts
         .lock()
         .map(|records| {
+            let mut seen = HashSet::new();
             records
                 .iter()
                 .filter(|record| record.enabled)
-                .map(|record| (record.id.clone(), record.home.clone()))
+                .filter_map(|record| {
+                    let identity = normalized_account_email(
+                        record.snapshot.as_ref().and_then(|snapshot| snapshot.email.as_deref()),
+                    )
+                    .unwrap_or_else(|| record.id.clone());
+                    seen.insert(identity).then(|| (record.id.clone(), record.home.clone()))
+                })
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
@@ -966,6 +1149,13 @@ async fn discover_new_accounts(
     }
 
     eprintln!("discovery: probing {} new Codex-home candidate(s)", unknown.len());
+    let cached_by_identity = config::load_usage_cache()
+        .into_iter()
+        .filter_map(|cached| {
+            normalized_account_email(cached.snapshot.email.as_deref())
+                .map(|identity| (identity, cached.snapshot))
+        })
+        .collect::<HashMap<_, _>>();
     let mut jobs = JoinSet::new();
     let operation_semaphore = Arc::new(Semaphore::new(operation_concurrency.max(1)));
     for (order, home) in unknown.into_iter().enumerate() {
@@ -976,7 +1166,11 @@ async fn discover_new_accounts(
             let Ok(_operation_permit) = operation_semaphore.acquire_owned().await else { return None; };
             let Ok(_permit) = rpc_semaphore.acquire_owned().await else { return None; };
             let result = codex::read_openai_account(&codex_path, &home).await;
-            Some((order, home, result))
+            let identity_email = match &result {
+                Ok(snapshot) => snapshot.email.clone(),
+                Err(_) => codex::read_openai_identity(&codex_path, &home).await.ok().flatten(),
+            };
+            Some((order, home, result, identity_email))
         });
     }
 
@@ -988,8 +1182,8 @@ async fn discover_new_accounts(
             Err(error) => eprintln!("discovery task failed: {error}"),
         }
     }
-    completed.sort_by_key(|(order, _, _)| *order);
-    for (_, home, result) in completed {
+    completed.sort_by_key(|(order, _, _, _)| *order);
+    for (_, home, result, identity_email) in completed {
         match result {
             Ok(snapshot) => {
                 eprintln!("discovery: found OpenAI account at {}", home.display());
@@ -997,6 +1191,29 @@ async fn discover_new_accounts(
                 schedule_render(ui.clone(), accounts.clone(), config.clone(), last_anchor.clone(), None);
             }
             Err(error) => {
+                let user_message = error.user_message().to_string();
+                let cached_snapshot = identity_email
+                    .as_deref()
+                    .and_then(|email| normalized_account_email(Some(email)))
+                    .and_then(|identity| cached_by_identity.get(&identity).cloned());
+                if let Some(email) = identity_email {
+                    let snapshot = cached_snapshot.unwrap_or_else(|| UsageSnapshot {
+                        email: Some(email.clone()),
+                        bucket_name: None,
+                        windows: Vec::new(),
+                        reset_available_count: 0,
+                        reset_credits: Vec::new(),
+                    });
+                    eprintln!(
+                        "discovery: matched moved account {email} at {}; updating its path despite the usage error",
+                        home.display()
+                    );
+                    let id = canonical_id(&home);
+                    apply_snapshot(home, snapshot, &accounts, &config);
+                    apply_refresh_error(&id, user_message, &accounts);
+                    schedule_render(ui.clone(), accounts.clone(), config.clone(), last_anchor.clone(), None);
+                    continue;
+                }
                 // A shallow candidate may be an incomplete/old Codex directory. It is
                 // intentionally not persisted as an account unless Codex validates it.
                 eprintln!("discovery: ignoring {}: {error}", home.display());
@@ -1218,43 +1435,17 @@ fn spawn_worker(
                         .await
                     {
                         Ok(handle) => {
-                            eprintln!("KDE StatusNotifierItem ready");
+                            eprintln!("StatusNotifierItem tray ready");
                             Some(handle)
                         }
                         Err(error) => {
-                            eprintln!("KDE StatusNotifierItem unavailable: {error}");
+                            eprintln!("StatusNotifierItem tray unavailable: {error}");
                             None
                         }
                     }
                 } else {
                     None
                 };
-
-                match (codex_path.clone(), config::load_pending_reset()) {
-                    (Some(codex_path), Ok(Some(pending))) => {
-                        tokio::spawn(reconcile_pending_reset(
-                            codex_path,
-                            pending,
-                            accounts.clone(),
-                            config.clone(),
-                            ui.clone(),
-                            last_anchor_shared.clone(),
-                        ));
-                    }
-                    (_, Err(error)) => eprintln!(
-                        "reset: pending transaction journal is unreadable; reset use remains blocked: {error}"
-                    ),
-                    _ => {}
-                }
-
-                // Background/autostart launches yield to the desktop login workload.
-                // If the user opens the panel first, RefreshIfStale runs immediately and
-                // this delayed pass becomes a no-op because the data is already fresh.
-                let startup_refresh_tx = tx.clone();
-                tokio::spawn(async move {
-                    tokio::time::sleep(STARTUP_REFRESH_DELAY).await;
-                    send(&startup_refresh_tx, WorkerCommand::RefreshAtStartup);
-                });
 
                 let tick_tx = tx.clone();
                 tokio::spawn(async move {
@@ -1376,21 +1567,14 @@ fn spawn_worker(
                             });
                             if opening { send(&tx, WorkerCommand::RefreshIfStale); }
                         }
-                        refresh_command @ (WorkerCommand::Refresh | WorkerCommand::RefreshIfStale | WorkerCommand::RefreshAtStartup) => {
+                        refresh_command @ (WorkerCommand::Refresh | WorkerCommand::RefreshIfStale) => {
                             let force = matches!(refresh_command, WorkerCommand::Refresh);
-                            let startup_pass = matches!(refresh_command, WorkerCommand::RefreshAtStartup);
                             if !force {
                                 let still_fresh = last_data_refresh
                                     .lock()
                                     .ok()
                                     .and_then(|value| *value)
-                                .map(|when| {
-                                    when.elapsed() < if startup_pass {
-                                        Duration::from_secs(60)
-                                    } else {
-                                        OPEN_REFRESH_FRESHNESS
-                                    }
-                                })
+                                .map(|when| when.elapsed() < OPEN_REFRESH_FRESHNESS)
                                     .unwrap_or(false);
                                 if still_fresh {
                                     eprintln!("refresh: open skipped because account data is less than {}s old", OPEN_REFRESH_FRESHNESS.as_secs());
@@ -1414,6 +1598,19 @@ fn spawn_worker(
                             let tx2 = tx.clone();
                             let last_data_refresh2 = last_data_refresh.clone();
                             tokio::spawn(async move {
+                                // A pending reset is reconciled only as part of an explicit
+                                // open/refresh action. Background launches stay read-only.
+                                if let Ok(Some(pending)) = config::load_pending_reset() {
+                                    reconcile_pending_reset(
+                                        codex_path.clone(),
+                                        pending,
+                                        accounts2.clone(),
+                                        config2.clone(),
+                                        ui2.clone(),
+                                        anchor2.clone(),
+                                    )
+                                    .await;
+                                }
                                 let had_known_accounts = accounts2
                                     .lock()
                                     .map(|records| records.iter().any(|record| record.enabled))
@@ -1423,7 +1620,7 @@ fn spawn_worker(
                                 refresh_known_accounts(
                                     codex_path.clone(), accounts2.clone(), config2.clone(), ui2.clone(), anchor2.clone(),
                                     rpc_semaphore2.clone(),
-                                    if startup_pass { STARTUP_REFRESH_CONCURRENCY } else { INTERACTIVE_REFRESH_CONCURRENCY },
+                                    INTERACTIVE_REFRESH_CONCURRENCY,
                                 ).await;
 
                                 // Once known accounts are current, the visible refresh operation is done.
@@ -1438,7 +1635,7 @@ fn spawn_worker(
                                     discover_new_accounts(
                                         codex_path, accounts2, config2, ui2.clone(), anchor2,
                                         rpc_semaphore2,
-                                        if startup_pass { 1 } else { INTERACTIVE_DISCOVERY_CONCURRENCY },
+                                        INTERACTIVE_DISCOVERY_CONCURRENCY,
                                     ).await;
                                     discovering2.store(false, Ordering::SeqCst);
                                 } else {
@@ -1607,8 +1804,18 @@ fn main() -> Result<(), slint::PlatformError> {
     let ui = MainWindow::new()?;
     ui.window().on_close_requested(|| CloseRequestResponse::HideWindow);
 
-    let loaded_config = config::load();
-    let cached_usage = config::load_usage_cache()
+    let mut loaded_config = config::load();
+    let loaded_cache = config::load_usage_cache();
+    let (loaded_cache, reconciled) = reconcile_cached_accounts(&mut loaded_config, loaded_cache);
+    if reconciled {
+        if let Err(error) = config::save(&loaded_config) {
+            eprintln!("settings: could not persist reconciled account paths: {error}");
+        }
+        if let Err(error) = config::save_usage_cache(&loaded_cache) {
+            eprintln!("cache: could not persist reconciled account paths: {error}");
+        }
+    }
+    let cached_usage = loaded_cache
         .into_iter()
         .map(|cached| (canonical_id(&cached.home), cached.snapshot))
         .collect::<HashMap<_, _>>();
@@ -2026,12 +2233,12 @@ fn main() -> Result<(), slint::PlatformError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        LaunchMode, PanelAnchor, PanelEdge, SCREEN_MARGIN_PX, launch_mode, move_account,
+        LaunchMode, PanelAnchor, PanelEdge, SCREEN_MARGIN_PX, desktop_uses_status_notifier, launch_mode, move_account,
         infer_panel_edge, move_target, normalized_account_color, normalized_display_name, panel_position_for_size,
-        placeholder_record,
+        placeholder_record, reconcile_cached_accounts,
     };
     use crate::config::{AccountPreference, AppConfig};
-    use crate::domain::UsageSnapshot;
+    use crate::domain::{CachedUsage, UsageSnapshot};
     use std::fs;
 
     #[test]
@@ -2043,6 +2250,16 @@ mod tests {
             launch_mode(["--background".into(), "--open".into()]),
             LaunchMode::Open
         );
+    }
+
+    #[test]
+    fn non_gnome_linux_desktops_use_the_status_notifier_fallback() {
+        assert!(!desktop_uses_status_notifier("GNOME"));
+        assert!(!desktop_uses_status_notifier("ubuntu:GNOME"));
+        assert!(desktop_uses_status_notifier("KDE"));
+        assert!(desktop_uses_status_notifier("XFCE"));
+        assert!(desktop_uses_status_notifier("X-Cinnamon"));
+        assert!(desktop_uses_status_notifier(""));
     }
 
     #[test]
@@ -2097,6 +2314,53 @@ mod tests {
     }
 
     #[test]
+    fn cached_identity_migrates_preferences_to_the_current_home() {
+        let root = std::env::temp_dir().join(format!("agents-usage-identity-{}", uuid::Uuid::new_v4()));
+        let old_home = root.join("old-shadow-home");
+        let current_home = root.join("current-shadow-home");
+        fs::create_dir_all(&current_home).unwrap();
+        let email = "same@example.com";
+        let snapshot = UsageSnapshot {
+            email: Some(email.into()),
+            bucket_name: Some("codex".into()),
+            windows: Vec::new(),
+            reset_available_count: 0,
+            reset_credits: Vec::new(),
+        };
+        let mut config = AppConfig {
+            accounts: vec![
+                AccountPreference {
+                    home: old_home.clone(),
+                    display_name: Some("My account".into()),
+                    ..AccountPreference::default()
+                },
+                AccountPreference {
+                    home: current_home.clone(),
+                    ..AccountPreference::default()
+                },
+            ],
+            ..AppConfig::default()
+        };
+        let (cache, changed) = reconcile_cached_accounts(
+            &mut config,
+            vec![
+                CachedUsage { home: old_home, snapshot: snapshot.clone() },
+                CachedUsage { home: current_home.clone(), snapshot },
+            ],
+        );
+
+        assert!(changed);
+        assert_eq!(config.accounts.len(), 1);
+        assert_eq!(config.accounts[0].home, current_home);
+        assert_eq!(config.accounts[0].display_name.as_deref(), Some("My account"));
+        assert_eq!(config.accounts[0].identity_email.as_deref(), Some(email));
+        assert_eq!(cache.len(), 1);
+        assert_eq!(cache[0].home, config.accounts[0].home);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn account_move_targets_stop_at_list_boundaries() {
         assert_eq!(move_target(2, 4, -1), Some(1));
         assert_eq!(move_target(2, 4, 1), Some(3));
@@ -2112,6 +2376,8 @@ mod tests {
         let second = root.join("second");
         fs::create_dir_all(&first).unwrap();
         fs::create_dir_all(&second).unwrap();
+        fs::write(first.join("auth.json"), b"{}").unwrap();
+        fs::write(second.join("auth.json"), b"{}").unwrap();
         let mut config = AppConfig {
             accounts: vec![
                 AccountPreference { home: first.clone(), ..AccountPreference::default() },
@@ -2135,6 +2401,7 @@ mod tests {
     fn placeholder_restores_saved_or_global_expansion() {
         let root = std::env::temp_dir().join(format!("agents-usage-expanded-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("auth.json"), b"{}").unwrap();
         let collapsed = AccountPreference {
             home: root.clone(),
             ..AccountPreference::default()
@@ -2155,6 +2422,7 @@ mod tests {
     fn placeholder_restores_cached_usage_before_refresh() {
         let root = std::env::temp_dir().join(format!("agents-usage-cache-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("auth.json"), b"{}").unwrap();
         let preference = AccountPreference { home: root.clone(), ..AccountPreference::default() };
         let snapshot = UsageSnapshot {
             email: Some("cached@example.com".into()),
