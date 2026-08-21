@@ -3,3 +3,9 @@
 /.packaging-cache/
 *.log
 .DS_Store
+/mobile-android/.gradle/
+/mobile-android/.idea/
+/mobile-android/local.properties
+/mobile-android/**/build/
+*.jks
+*.keystore

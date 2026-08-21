@@ -1,0 +1,77 @@
+plugins {
+    id "com.android.application"
+}
+
+def cargoManifest = rootProject.file("../Cargo.toml").text
+def versionMatch = cargoManifest =~ /(?m)^version\s*=\s*"(\d+)\.(\d+)\.(\d+)"/
+if (!versionMatch.find()) {
+    throw new GradleException("Could not read the app version from Cargo.toml")
+}
+def versionParts = [versionMatch.group(1), versionMatch.group(2), versionMatch.group(3)].collect { it as int }
+def appVersionName = versionParts.join(".")
+def appVersionCode = versionParts[0] * 10000 + versionParts[1] * 100 + versionParts[2]
+def releaseStore = System.getenv("ANDROID_KEYSTORE_PATH")
+
+android {
+    namespace "io.github.agentsusagetray.companion"
+    compileSdk 36
+
+    defaultConfig {
+        applicationId "io.github.agentsusagetray.companion"
+        minSdk 26
+        targetSdk 36
+        versionCode appVersionCode
+        versionName appVersionName
+        testInstrumentationRunner "android.test.InstrumentationTestRunner"
+    }
+
+    if (releaseStore) {
+        signingConfigs {
+            release {
+                storeFile file(releaseStore)
+                storePassword System.getenv("ANDROID_KEYSTORE_PASSWORD")
+                keyAlias System.getenv("ANDROID_KEY_ALIAS")
+                keyPassword System.getenv("ANDROID_KEY_PASSWORD")
+            }
+        }
+    }
+
+    buildTypes {
+        debug {
+            applicationIdSuffix ".debug"
+            versionNameSuffix "-debug"
+        }
+        release {
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
+            if (releaseStore) {
+                signingConfig signingConfigs.release
+            }
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    lint {
+        abortOnError true
+        checkReleaseBuilds true
+        warningsAsErrors true
+        disable "ObsoleteSdkInt"
+    }
+
+    testOptions {
+        unitTests.returnDefaultValues = true
+    }
+}
+
+dependencies {
+    testImplementation "junit:junit:4.13.2"
+}

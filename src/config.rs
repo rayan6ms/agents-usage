@@ -26,6 +26,8 @@ pub struct AppConfig {
     pub additional_codex_homes: Vec<PathBuf>,
     #[serde(default)]
     pub accounts: Vec<AccountPreference>,
+    #[serde(default)]
+    pub mobile: MobileConfig,
 }
 
 impl Default for AppConfig {
@@ -41,9 +43,36 @@ impl Default for AppConfig {
             codex_executable: None,
             additional_codex_homes: Vec::new(),
             accounts: Vec::new(),
+            mobile: MobileConfig::default(),
         }
     }
 }
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MobileConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_mobile_bind")]
+    pub bind: String,
+    #[serde(default = "default_mobile_port")]
+    pub port: u16,
+    #[serde(default)]
+    pub access_token: Option<String>,
+}
+
+impl Default for MobileConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            bind: default_mobile_bind(),
+            port: default_mobile_port(),
+            access_token: None,
+        }
+    }
+}
+
+fn default_mobile_bind() -> String { "0.0.0.0".into() }
+fn default_mobile_port() -> u16 { 3765 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

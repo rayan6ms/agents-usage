@@ -7,7 +7,10 @@ root = Path(__file__).resolve().parents[1]
 required = [
     'Cargo.toml', '.cargo/config.toml', 'build.rs', 'README.md', 'LICENSE', 'CHANGELOG.md',
     'src/main.rs', 'src/codex.rs', 'src/config.rs', 'src/discovery.rs',
-    'src/domain.rs', 'src/ui_model.rs', 'ui/app.slint',
+    'src/domain.rs', 'src/mobile.rs', 'src/ui_model.rs', 'ui/app.slint',
+    'mobile/index.html', 'mobile/app.css', 'mobile/app.js',
+    'mobile/manifest.webmanifest', 'mobile/sw.js',
+    'mobile/icon-192.png', 'mobile/icon-512.png',
     'integration/gnome-shell/extension/extension.js',
     'integration/gnome-shell/extension/metadata.json',
     'packaging/linux/agents-usage.desktop.in',
@@ -53,7 +56,8 @@ assert 'experimentalApi": false' in codex
 assert '"name": "agents-usage"' in codex
 assert 'discover_new_accounts' in main and 'refresh_known_accounts' in main
 assert 'RefreshIfStale' in main and 'OPEN_REFRESH_FRESHNESS' in main
-assert 'launch_mode(std::env::args_os().skip(1))' in main
+assert 'let open_on_start = launch_mode(arguments)' in main
+assert 'mobile::serve' in main and '--mobile-pairing-url' in main
 assert 'activate_existing_instance_async(open_on_start)' in main
 assert 'RefreshAtStartup' not in main
 assert 'STARTUP_REFRESH_DELAY' not in main

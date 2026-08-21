@@ -12,6 +12,11 @@
     <binary>agents-usage</binary>
   </provides>
   <releases>
+    <release version="0.3.0" date="2026-08-21">
+      <description>
+        <p>Adds a read-only phone companion, private LAN and Tailscale pairing, and a signed Android application.</p>
+      </description>
+    </release>
     <release version="0.2.7" date="2026-08-20"/>
     <release version="0.2.6" date="2026-08-20"/>
     <release version="0.2.5" date="2026-08-19"/>

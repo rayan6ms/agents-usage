@@ -5,6 +5,7 @@ mod codex;
 mod config;
 mod discovery;
 mod domain;
+mod mobile;
 mod ui_model;
 
 use crate::config::{AppConfig, AccountPreference, UsageBarColorMode};
@@ -43,6 +44,84 @@ fn launch_mode(arguments: impl IntoIterator<Item = std::ffi::OsString>) -> Launc
     } else {
         LaunchMode::Background
     }
+}
+
+fn handle_mobile_command(arguments: &[std::ffi::OsString]) -> bool {
+    let Some(command) = arguments.first().and_then(|value| value.to_str()) else { return false; };
+    if !matches!(command, "--mobile-enable" | "--mobile-disable" | "--mobile-rotate-token" | "--mobile-pairing-url") {
+        return false;
+    }
+
+    let mut config = config::load();
+    match command {
+        "--mobile-enable" => {
+            config.mobile.enabled = true;
+            if config.mobile.access_token.as_ref().is_none_or(|token| token.len() < 32) {
+                config.mobile.access_token = Some(new_mobile_token());
+            }
+            match config::save(&config) {
+                Ok(()) => println!(
+                    "Mobile access enabled on {}:{}. Restart Agents Usage to apply it.",
+                    config.mobile.bind, config.mobile.port
+                ),
+                Err(error) => eprintln!("Could not enable mobile access: {error}"),
+            }
+        }
+        "--mobile-disable" => {
+            config.mobile.enabled = false;
+            match config::save(&config) {
+                Ok(()) => println!("Mobile access disabled. Restart Agents Usage to apply it."),
+                Err(error) => eprintln!("Could not disable mobile access: {error}"),
+            }
+        }
+        "--mobile-rotate-token" => {
+            config.mobile.access_token = Some(new_mobile_token());
+            match config::save(&config) {
+                Ok(()) => println!("Mobile pairing token rotated. Restart Agents Usage and pair phones again."),
+                Err(error) => eprintln!("Could not rotate the mobile pairing token: {error}"),
+            }
+        }
+        "--mobile-pairing-url" => {
+            let Some(base_url) = arguments.get(1).and_then(|value| value.to_str()) else {
+                eprintln!("Usage: agents-usage --mobile-pairing-url <http-or-https-base-url>");
+                return true;
+            };
+            let Some(token) = config.mobile.access_token.filter(|token| token.len() >= 32) else {
+                eprintln!("Mobile access has no pairing token. Run --mobile-enable first.");
+                return true;
+            };
+            match mobile_pairing_url(base_url, &token) {
+                Ok(url) => println!("{url}"),
+                Err(error) => eprintln!("Could not create pairing URL: {error}"),
+            }
+        }
+        _ => unreachable!(),
+    }
+    true
+}
+
+fn new_mobile_token() -> String {
+    format!("{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple())
+}
+
+fn mobile_pairing_url(base_url: &str, token: &str) -> Result<String, &'static str> {
+    let base_url = base_url.trim().trim_end_matches('/');
+    let lower = base_url.to_ascii_lowercase();
+    let remainder = lower
+        .strip_prefix("https://")
+        .or_else(|| lower.strip_prefix("http://"))
+        .ok_or("the base URL must start with http:// or https://")?;
+    let authority = remainder.split('/').next().unwrap_or_default();
+    if authority.is_empty() || authority.contains('@') {
+        return Err("the base URL must contain a desktop hostname without credentials");
+    }
+    if base_url.chars().any(char::is_whitespace) || base_url.contains(['?', '#']) {
+        return Err("the base URL must not contain whitespace, a query, or a fragment");
+    }
+    if token.len() < 32 || !token.bytes().all(|byte| byte.is_ascii_alphanumeric() || b"._~-".contains(&byte)) {
+        return Err("the mobile pairing token is invalid");
+    }
+    Ok(format!("{base_url}/pair?token={token}"))
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1476,6 +1555,21 @@ fn spawn_worker(
                 let discovering = Arc::new(AtomicBool::new(false));
                 let rpc_semaphore = Arc::new(Semaphore::new(MAX_RPC_CONCURRENCY));
                 let last_data_refresh = Arc::new(Mutex::new(None::<Instant>));
+
+                let mobile_config = config.lock().ok().map(|cfg| cfg.mobile.clone()).unwrap_or_default();
+                if mobile_config.enabled {
+                    let mobile_accounts = accounts.clone();
+                    let mobile_app_config = config.clone();
+                    let mobile_refreshing = refreshing.clone();
+                    let mobile_tx = tx.clone();
+                    tokio::spawn(async move {
+                        if let Err(error) = mobile::serve(
+                            mobile_config, mobile_accounts, mobile_app_config, mobile_refreshing, mobile_tx,
+                        ).await {
+                            eprintln!("mobile: server stopped: {error}");
+                        }
+                    });
+                }
                 #[cfg(target_os = "linux")]
                 let popup_focus_seen = Arc::new(AtomicBool::new(false));
 
@@ -1758,7 +1852,9 @@ fn main() -> Result<(), slint::PlatformError> {
     #[cfg(target_os = "linux")]
     use slint::winit_030::winit::platform::x11::{EventLoopBuilderExtX11 as _, WindowAttributesExtX11, WindowType};
 
-    let open_on_start = launch_mode(std::env::args_os().skip(1)) == LaunchMode::Open;
+    let arguments = std::env::args_os().skip(1).collect::<Vec<_>>();
+    if handle_mobile_command(&arguments) { return Ok(()); }
+    let open_on_start = launch_mode(arguments) == LaunchMode::Open;
     #[cfg(target_os = "linux")]
     if activate_existing_instance(open_on_start) {
         return Ok(());
@@ -2233,9 +2329,9 @@ fn main() -> Result<(), slint::PlatformError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        LaunchMode, PanelAnchor, PanelEdge, SCREEN_MARGIN_PX, desktop_uses_status_notifier, launch_mode, move_account,
-        infer_panel_edge, move_target, normalized_account_color, normalized_display_name, panel_position_for_size,
-        placeholder_record, reconcile_cached_accounts,
+        LaunchMode, PanelAnchor, PanelEdge, SCREEN_MARGIN_PX, desktop_uses_status_notifier, infer_panel_edge,
+        launch_mode, mobile_pairing_url, move_account, move_target, normalized_account_color,
+        normalized_display_name, panel_position_for_size, placeholder_record, reconcile_cached_accounts,
     };
     use crate::config::{AccountPreference, AppConfig};
     use crate::domain::{CachedUsage, UsageSnapshot};
@@ -2250,6 +2346,19 @@ mod tests {
             launch_mode(["--background".into(), "--open".into()]),
             LaunchMode::Open
         );
+    }
+
+    #[test]
+    fn mobile_pairing_urls_are_normalized_and_validated() {
+        let token = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        assert_eq!(
+            mobile_pairing_url(" https://desktop.example.ts.net/agents-usage/ ", token).unwrap(),
+            format!("https://desktop.example.ts.net/agents-usage/pair?token={token}")
+        );
+        assert!(mobile_pairing_url("ftp://desktop.example", token).is_err());
+        assert!(mobile_pairing_url("https://user@desktop.example", token).is_err());
+        assert!(mobile_pairing_url("https://desktop.example/path?wrong=1", token).is_err());
+        assert!(mobile_pairing_url("https://desktop.example", "short").is_err());
     }
 
     #[test]

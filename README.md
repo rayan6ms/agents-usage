@@ -20,6 +20,44 @@ Settings let you rename, recolor, reorder, disable, and expand accounts. You can
 
 Refreshes update accounts independently, preserve the last valid data when one account fails, and check for newly added Codex homes. The last valid usage is also cached locally so the panel has useful data immediately; a fresh check runs when the panel is opened or Refresh is pressed.
 
+## Phone companion
+
+Agents Usage can serve a phone-sized companion while keeping Codex and all account credentials on the desktop. The companion displays the same enabled accounts, colors, quotas, countdowns, and privacy choices. Its only desktop action is Refresh; settings and reset-credit actions are intentionally unavailable.
+
+Download the **Agents Usage Android APK** from [GitHub Releases](https://github.com/rayan6ms/agents-usage/releases/latest). It supports Android 8.0 and newer and needs no account, root access, Termux, or USB connection.
+
+Enable it once, then restart Agents Usage:
+
+```bash
+agents-usage --mobile-enable
+```
+
+The service listens on TCP port `3765` and requires a private 256-bit pairing token. Generate a pairing link using either the desktop's LAN address or a Tailscale HTTPS base URL:
+
+```bash
+agents-usage --mobile-pairing-url http://192.168.1.20:3765
+agents-usage --mobile-pairing-url https://desktop.example.ts.net/agents-usage
+```
+
+Paste the generated link into the Android app and tap **Pair**. Add both a LAN link and a Tailscale link if desired; the app remembers only their non-secret base addresses and automatically tries another saved connection when one is unreachable.
+
+For encrypted access at home or away, with no public port exposed, proxy the service through Tailscale Serve:
+
+```bash
+tailscale serve --bg --set-path /agents-usage http://127.0.0.1:3765
+```
+
+Direct LAN access works at `http://DESKTOP_LAN_IP:3765`, subject to the desktop firewall. Tailscale access works anywhere that both devices are connected to the same tailnet. Do not use port forwarding or Tailscale Funnel: this view is intended to remain private. Keep every pairing link private because anyone who has one and can reach the desktop can view usage and request a refresh.
+
+To revoke paired phones, rotate the token and restart the app. To stop listening, disable mobile access and restart:
+
+```bash
+agents-usage --mobile-rotate-token
+agents-usage --mobile-disable
+```
+
+See the [complete phone setup and troubleshooting guide](docs/mobile-companion.md), including LAN, Tailscale, APK verification, connection management, and the security model.
+
 ## Current limitations
 
 - Remaining-quota reporting currently supports OpenAI accounts through Codex only.

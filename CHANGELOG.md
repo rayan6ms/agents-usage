@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.0 — 2026-08-21
+
+- Added an opt-in, token-protected phone view with the desktop's accounts, quota bars, countdowns, privacy choices, and Refresh action.
+- Added a native Android 8+ companion with LAN/Tailscale pairing, multiple saved endpoints, secure WebView restrictions, and automatic connection fallback.
+- Added signed Android APKs and checksums to tagged GitHub releases, plus desktop and Android pull-request CI.
+- Added complete LAN, Tailscale Serve, revocation, verification, troubleshooting, and security documentation.
+
 ## 0.2.7 — 2026-08-20
 
 - Reconcile moved Codex homes by normalized account email while preserving account settings and ordering.
