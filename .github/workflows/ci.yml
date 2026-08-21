@@ -32,6 +32,7 @@ jobs:
             mobile-android/*.gradle
             mobile-android/gradle/wrapper/gradle-wrapper.properties
             mobile-android/app/*.gradle
-      - name: Install Android SDK
-        run: sdkmanager "platforms;android-36" "build-tools;35.0.0"
+      - uses: android-actions/setup-android@v4
+        with:
+          packages: "platform-tools platforms;android-36 build-tools;35.0.0"
       - run: ./mobile-android/gradlew --no-daemon -p mobile-android testDebugUnitTest lintDebug assembleDebug
