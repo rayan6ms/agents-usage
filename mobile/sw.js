@@ -1,6 +1,6 @@
 "use strict";
 
-const CACHE_NAME = "agents-usage-mobile-v3";
+const CACHE_NAME = "agents-usage-mobile-v4";
 const ROOT = new URL("./", self.location.href);
 const SHELL = ["", "app.css", "app.js", "manifest.webmanifest", "icon-192.png", "icon-512.png"].map(path => new URL(path, ROOT).toString());
 

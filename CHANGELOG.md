@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.0 — 2026-08-22
+
+- Added automatic discovery and live quota adapters for OpenCode Go, Anthropic Claude, and Google Gemini alongside OpenAI Codex.
+- Added authenticated Cursor and xAI Grok discovery with honest capability notices while their individual consumer usage remains unavailable through supported APIs.
+- Preserved every provider-specific quota window, including OpenCode monthly and Claude/Gemini scoped limits, across the desktop and phone views.
+- Added current Gemini keychain, encrypted-file, and legacy OAuth credential compatibility; provider-aware settings/cache identities; bounded provider requests; actionable first-refresh failures; and stale-data fallback.
+- Added the complete provider icon set and provider-specific marks to both desktop and mobile.
+
 ## 0.3.1 — 2026-08-22
 
 - Replaced the global 5-hour expansion option with an independent reset-counter preference that keeps countdowns visible without opening account details.

@@ -145,16 +145,16 @@ impl UsageBarColorMode {
 
 fn default_usage_bar_custom_color() -> String { "#27bfce".into() }
 
-fn schema_version() -> u32 { 2 }
+fn schema_version() -> u32 { 3 }
 
 pub fn migrate_display_preferences(config: &mut AppConfig) -> bool {
     if config.schema_version >= schema_version() {
         return false;
     }
-    // The old global 5-hour option permanently expanded every account. When
-    // it was enabled, reset that derived state once and reinterpret the option
-    // as the non-expanding reset-counter preference.
-    if config.always_show_reset_counter {
+    // The old global 5-hour option permanently expanded every account. This
+    // migration was introduced in schema 2; do not repeat it for later schema
+    // upgrades.
+    if config.schema_version < 2 && config.always_show_reset_counter {
         for preference in &mut config.accounts {
             preference.expanded = false;
         }
@@ -165,6 +165,8 @@ pub fn migrate_display_preferences(config: &mut AppConfig) -> bool {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AccountPreference {
+    #[serde(default = "default_provider_id")]
+    pub provider_id: String,
     pub home: PathBuf,
     #[serde(default)]
     pub identity_email: Option<String>,
@@ -185,6 +187,7 @@ fn default_true() -> bool { true }
 impl Default for AccountPreference {
     fn default() -> Self {
         Self {
+            provider_id: default_provider_id(),
             home: PathBuf::new(),
             identity_email: None,
             display_name: None,
@@ -195,6 +198,8 @@ impl Default for AccountPreference {
         }
     }
 }
+
+fn default_provider_id() -> String { "openai".into() }
 
 pub fn app_config_dir() -> PathBuf {
     #[cfg(target_os = "windows")]
@@ -274,11 +279,18 @@ pub fn save_usage_cache(cache: &[CachedUsage]) -> io::Result<()> {
 }
 
 
-pub fn preference_for_mut<'a>(config: &'a mut AppConfig, home: &Path) -> &'a mut AccountPreference {
-    if let Some(index) = config.accounts.iter().position(|pref| same_path(&pref.home, home)) {
+pub fn preference_for_provider_mut<'a>(
+    config: &'a mut AppConfig,
+    provider_id: &str,
+    home: &Path,
+) -> &'a mut AccountPreference {
+    if let Some(index) = config.accounts.iter().position(|pref| {
+        pref.provider_id == provider_id && same_path(&pref.home, home)
+    }) {
         return &mut config.accounts[index];
     }
     config.accounts.push(AccountPreference {
+        provider_id: provider_id.into(),
         home: home.to_path_buf(),
         ..AccountPreference::default()
     });
@@ -469,7 +481,7 @@ expanded = true
         .unwrap();
 
         assert!(migrate_display_preferences(&mut config));
-        assert_eq!(config.schema_version, 2);
+        assert_eq!(config.schema_version, 3);
         assert!(config.always_show_reset_counter);
         assert!(!config.accounts[0].expanded);
         let encoded = toml::to_string(&config).unwrap();
@@ -517,6 +529,7 @@ port = 3765
     #[test]
     fn usage_cache_round_trips_without_authentication_data() {
         let cache = vec![CachedUsage {
+            provider_id: "openai".into(),
             home: "/tmp/example".into(),
             snapshot: UsageSnapshot {
                 email: Some("cached@example.com".into()),

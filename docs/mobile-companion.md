@@ -1,10 +1,10 @@
 # Phone companion setup
 
-The phone companion is a read-only view of usage already collected by the desktop app. Codex stays installed and signed in on the desktop. The phone cannot view credentials or local paths, change account settings, or consume reset credits; its only desktop action is Refresh.
+The phone companion is a read-only view of usage already collected by the desktop app. Provider CLIs stay installed and signed in on the desktop. The phone cannot view credentials or local paths, change account settings, or consume reset credits; its only desktop action is Refresh.
 
 ## Requirements and supported configurations
 
-- Agents Usage 0.3.1 or newer, running in a logged-in desktop session.
+- Agents Usage 0.4.0 or newer, running in a logged-in desktop session.
 - Android 8.0/API 26 or newer with Android System WebView enabled.
 - For LAN: both devices on the same private network without guest/client isolation.
 - For remote access: Tailscale on both devices, signed into the same tailnet.

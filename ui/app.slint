@@ -6,6 +6,15 @@ export struct ResetCreditView {
     expiry: string,
 }
 
+export struct LimitView {
+    label: string,
+    remaining: float,
+    percent-text: string,
+    has-reset-time: bool,
+    reset-text: string,
+    reset-color: color,
+}
+
 export struct AccountView {
     id: string,
     provider-id: string,
@@ -40,6 +49,7 @@ export struct AccountView {
     has-short-reset-time: bool,
     short-reset-text: string,
     short-reset-color: color,
+    detail-limits: [LimitView],
     has-reset-credits: bool,
     reset-count-text: string,
     reset-credits: [ResetCreditView],
@@ -178,9 +188,11 @@ component ProviderMark inherits Rectangle {
         source: root.provider-id == "anthropic"
             ? @image-url("../assets/providers/anthropic.svg")
             : root.provider-id == "google"
-            ? @image-url("../assets/providers/google.svg")
+            ? @image-url("../assets/providers/gemini.svg")
             : root.provider-id == "xai"
             ? @image-url("../assets/providers/xai.svg")
+            : root.provider-id == "cursor"
+            ? @image-url("../assets/providers/cursor.svg")
             : @image-url("../assets/providers/opencode.svg");
         colorize: white;
         image-fit: contain;
@@ -637,14 +649,14 @@ component AccountRow inherits Rectangle {
                 padding-bottom: root.account.reset-credits.length > 0 ? 9px : 5px;
                 spacing: 1px;
 
-                if !root.account.pin-short && root.account.has-short-limit: LimitLine {
-                    label: root.account.short-label;
-                    remaining: root.account.short-remaining;
-                    percent-text: root.account.short-percent-text;
-                    accent: root.usage-bar-color(root.account.short-remaining);
-                    reset-text: root.account.short-reset-text;
-                    reset-color: root.account.short-reset-color;
-                    show-reset-text: root.account.has-short-reset-time;
+                for limit in root.account.detail-limits: LimitLine {
+                    label: limit.label;
+                    remaining: limit.remaining;
+                    percent-text: limit.percent-text;
+                    accent: root.usage-bar-color(limit.remaining);
+                    reset-text: limit.reset-text;
+                    reset-color: limit.reset-color;
+                    show-reset-text: limit.has-reset-time;
                     color-reset-timer: root.color-reset-timers;
                 }
 

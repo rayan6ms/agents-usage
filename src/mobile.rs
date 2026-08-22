@@ -2,7 +2,7 @@ use crate::WorkerCommand;
 use crate::config;
 use crate::config::{AppConfig, MobileConfig, MobileDevice, MobilePairing};
 use crate::domain::{AccountRecord, RateWindow};
-use axum::extract::{Query, State};
+use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::header::{
     CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, COOKIE, HeaderName, LOCATION, SET_COOKIE,
     RETRY_AFTER, X_CONTENT_TYPE_OPTIONS,
@@ -34,6 +34,12 @@ const APP_JS: &str = include_str!("../mobile/app.js");
 const MANIFEST: &str = include_str!("../mobile/manifest.webmanifest");
 const SERVICE_WORKER: &str = include_str!("../mobile/sw.js");
 const ICON_SVG: &str = include_str!("../packaging/linux/agents-usage.svg");
+const PROVIDER_OPENAI: &str = include_str!("../assets/providers/openai.svg");
+const PROVIDER_OPENCODE: &str = include_str!("../assets/providers/opencode.svg");
+const PROVIDER_ANTHROPIC: &str = include_str!("../assets/providers/anthropic.svg");
+const PROVIDER_GOOGLE: &str = include_str!("../assets/providers/gemini.svg");
+const PROVIDER_CURSOR: &str = include_str!("../assets/providers/cursor.svg");
+const PROVIDER_XAI: &str = include_str!("../assets/providers/xai.svg");
 const ICON_192: &[u8] = include_bytes!("../mobile/icon-192.png");
 const ICON_512: &[u8] = include_bytes!("../mobile/icon-512.png");
 
@@ -142,6 +148,7 @@ fn router(state: MobileServerState) -> Router {
         .route("/manifest.webmanifest", get(manifest))
         .route("/sw.js", get(service_worker))
         .route("/icon.svg", get(icon_svg))
+        .route("/provider-icons/{provider}", get(provider_icon))
         .route("/icon-192.png", get(icon_192))
         .route("/icon-512.png", get(icon_512))
         .route("/pair", get(pair))
@@ -203,6 +210,19 @@ async fn icon_svg() -> Response {
         "image/svg+xml",
         "public, max-age=86400",
     )
+}
+
+async fn provider_icon(AxumPath(provider): AxumPath<String>) -> Response {
+    let icon = match provider.as_str() {
+        "openai" => PROVIDER_OPENAI,
+        "opencode" => PROVIDER_OPENCODE,
+        "anthropic" => PROVIDER_ANTHROPIC,
+        "google" => PROVIDER_GOOGLE,
+        "cursor" => PROVIDER_CURSOR,
+        "xai" => PROVIDER_XAI,
+        _ => return StatusCode::NOT_FOUND.into_response(),
+    };
+    static_response(icon.as_bytes(), "image/svg+xml", "public, max-age=86400")
 }
 
 async fn icon_192() -> Response {
@@ -755,6 +775,20 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+
+        for provider in ["openai", "opencode", "anthropic", "google", "cursor", "xai"] {
+            let icon = app
+                .clone()
+                .oneshot(
+                    Request::get(format!("/provider-icons/{provider}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(icon.status(), StatusCode::OK);
+            assert_eq!(icon.headers().get("content-type").unwrap(), "image/svg+xml");
+        }
 
         let uri = format!(
             "/agents-usage/pair?token={pairing_token}&path=/agents-usage/&device=Pixel%20test"
