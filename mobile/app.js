@@ -67,8 +67,8 @@ function barColor(account, window, accountCount) {
   return accountCount <= 1 ? "#ffffff" : colorValue(account.color);
 }
 
-function limitHtml(account, window, isExpanded, accountCount) {
-  const showReset = isExpanded && window.resets_at;
+function limitHtml(account, window, showResetCounter, accountCount) {
+  const showReset = showResetCounter && window.resets_at;
   const reset = showReset ? `<span class="reset-text"> • resets in <span class="reset-timer ${latestState.color_reset_timers ? "colored" : ""}" style="--timer-color:${timerColor(window, latestState.server_time)}">${countdown(window.resets_at, latestState.server_time)}</span></span>` : "";
   return `<div class="limit"><span class="limit-label">${escapeHtml(windowLabel(window, false))}</span>${reset}<span class="bar"><span class="bar-fill" style="--remaining:${remaining(window)};--bar-color:${barColor(account, window, accountCount)}"></span></span><span class="percent">${percent(window)}</span></div>`;
 }
@@ -86,12 +86,13 @@ function accountHtml(account, accountCount) {
   const shortWindow = windows.length >= 2 ? windows[0] : null;
   const longWindow = windows.at(-1) || null;
   const isExpanded = expandedOverrides.has(account.key) ? expandedOverrides.get(account.key) : account.expanded;
-  const pinShort = (latestState.pin_short_global || account.pin_short) && !!shortWindow;
+  const alwaysShowResetCounter = latestState.always_show_reset_counter === true;
+  const pinShort = account.pin_short && !!shortWindow;
   const hasDetails = !!shortWindow || !!longWindow?.resets_at || !!shortWindow?.resets_at || account.reset_available_count > 0;
   const shownName = latestState.blur_names && !revealedNames.has(account.key) ? account.masked_display_name : account.display_name;
   const shownEmail = latestState.blur_emails && !revealedEmails.has(account.key) ? account.masked_email : account.email;
-  const mainLimit = longWindow ? limitHtml(account, {...longWindow, duration_mins: longWindow.duration_mins}, isExpanded, accountCount).replace(windowLabel(longWindow, false), windowLabel(longWindow, true)) : `<div class="checking">${escapeHtml(account.error || "Checking usage…")}</div>`;
-  const pinned = pinShort ? limitHtml(account, shortWindow, isExpanded, accountCount) : "";
+  const mainLimit = longWindow ? limitHtml(account, {...longWindow, duration_mins: longWindow.duration_mins}, isExpanded || alwaysShowResetCounter, accountCount).replace(windowLabel(longWindow, false), windowLabel(longWindow, true)) : `<div class="checking">${escapeHtml(account.error || "Checking usage…")}</div>`;
+  const pinned = pinShort ? limitHtml(account, shortWindow, isExpanded || alwaysShowResetCounter, accountCount) : "";
   const hiddenShort = isExpanded && shortWindow && !pinShort ? limitHtml(account, shortWindow, true, accountCount) : "";
   const resetCount = isExpanded && account.reset_available_count ? `<div class="detail-line"><span>Reset credits</span><span>${account.reset_available_count} available</span></div>` : "";
   const credits = isExpanded ? account.reset_credits.map(credit => `<div class="credit"><div class="credit-title">${escapeHtml(credit.title)}</div><div class="credit-expiry">${escapeHtml(expiryText(credit))}</div></div>`).join("") : "";

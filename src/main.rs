@@ -863,8 +863,8 @@ fn render_ui(
 ) {
     let records = accounts.lock().map(|value| value.clone()).unwrap_or_default();
     let cfg = config.lock().map(|value| value.clone()).unwrap_or_default();
-    let (model, enabled_count) = ui_model::model(&records, cfg.pin_short_global);
-    let dashboard_height = ui_model::panel_height(&records, cfg.pin_short_global);
+    let (model, enabled_count) = ui_model::model(&records);
+    let dashboard_height = ui_model::panel_height(&records);
     let height = if ui.get_settings_visible() {
         ui.get_settings_height_px()
     } else {
@@ -878,7 +878,7 @@ fn render_ui(
     ui.set_color_reset_timers(cfg.color_reset_timers);
     ui.set_usage_bar_color_mode(cfg.usage_bar_color_mode.as_str().into());
     ui.set_usage_bar_custom_color(ui_model::color_from_name(&cfg.usage_bar_custom_color));
-    ui.set_pin_short_global(cfg.pin_short_global);
+    ui.set_always_show_reset_counter(cfg.always_show_reset_counter);
     ui.set_mobile_enabled(cfg.mobile.enabled);
     ui.set_mobile_allow_lan(cfg.mobile.allows_lan());
     if !cfg.mobile.enabled {
@@ -1184,13 +1184,11 @@ fn record_from_snapshot(
         .filter(|value| !value.is_empty())
         .map(str::to_string)
         .unwrap_or_else(|| source_account_name(&home));
-    let expand_globally = config.pin_short_global;
     let pref = config::preference_for_mut(config, &home);
     let fallback_color = ui_model::ACCOUNT_COLORS[color_index % ui_model::ACCOUNT_COLORS.len()];
     let color_name = normalized_account_color(pref.color.as_deref(), fallback_color);
     if pref.color.as_deref() != Some(color_name.as_str()) { pref.color = Some(color_name.clone()); }
     if pref.display_name.is_none() { pref.display_name = Some(discovered_name.clone()); }
-    if expand_globally { pref.expanded = true; }
     AccountRecord {
         id,
         home,
@@ -1211,7 +1209,6 @@ fn record_from_snapshot(
 fn placeholder_record(
     pref: &AccountPreference,
     index: usize,
-    expand_globally: bool,
     cached_snapshot: Option<UsageSnapshot>,
 ) -> Option<AccountRecord> {
     if !discovery::is_marked_codex_home(&pref.home) { return None; }
@@ -1226,7 +1223,7 @@ fn placeholder_record(
         ),
         enabled: pref.enabled,
         pin_short: pref.pin_short,
-        expanded: pref.expanded || expand_globally,
+        expanded: pref.expanded,
         name_revealed: false,
         email_revealed: false,
         confirm_credit_id: String::new(),
@@ -2108,9 +2105,10 @@ fn main() -> Result<(), slint::PlatformError> {
     ui.window().on_close_requested(|| CloseRequestResponse::HideWindow);
 
     let mut loaded_config = config::load();
+    let migrated_display_preferences = config::migrate_display_preferences(&mut loaded_config);
     let migrated_mobile_access = mobile::migrate_legacy_access(&mut loaded_config);
     let migrated_persistent_sessions = mobile::make_device_sessions_persistent(&mut loaded_config);
-    if migrated_mobile_access || migrated_persistent_sessions {
+    if migrated_display_preferences || migrated_mobile_access || migrated_persistent_sessions {
         if let Err(error) = config::save(&loaded_config) {
             eprintln!("mobile: could not persist the phone-session migration: {error}");
         }
@@ -2129,7 +2127,6 @@ fn main() -> Result<(), slint::PlatformError> {
         .into_iter()
         .map(|cached| (canonical_id(&cached.home), cached.snapshot))
         .collect::<HashMap<_, _>>();
-    let expand_globally = loaded_config.pin_short_global;
     let initial_records = loaded_config
         .accounts
         .iter()
@@ -2138,7 +2135,6 @@ fn main() -> Result<(), slint::PlatformError> {
             placeholder_record(
                 pref,
                 index,
-                expand_globally,
                 cached_usage.get(&canonical_id(&pref.home)).cloned(),
             )
         })
@@ -2236,7 +2232,7 @@ fn main() -> Result<(), slint::PlatformError> {
             let uses = u8::from(endpoints.lan.is_some()) + u8::from(endpoints.tailscale.is_some());
             if uses == 0 {
                 if let Some(ui) = ui_weak.upgrade() {
-                    ui.set_mobile_status("Set up Tailscale or turn on Allow direct LAN first.".into());
+                    ui.set_mobile_status("Choose Allow direct LAN or set up Tailscale, then show the QR.".into());
                 }
                 return;
             }
@@ -2259,7 +2255,7 @@ fn main() -> Result<(), slint::PlatformError> {
                 ui.set_mobile_tailscale_url(endpoints.tailscale.unwrap_or_default().into());
                 ui.set_mobile_pairing_link(bundle.clone().into());
                 ui.set_mobile_qr_cells(qr_cell_model(&bundle));
-                ui.set_mobile_status("Pairing link ready · expires in 10 minutes".into());
+                ui.set_mobile_status("QR ready · scan it with the phone camera".into());
             }
             send(&tx, WorkerCommand::PersistSettings);
         });
@@ -2525,17 +2521,9 @@ fn main() -> Result<(), slint::PlatformError> {
         let config_arc = config.clone();
         let last_anchor = last_anchor_shared.clone();
         let tx = tx.clone();
-        ui.on_pin_short_global_changed(move |value| {
-            if value {
-                if let Ok(mut records) = accounts.lock() {
-                    for record in records.iter_mut() { record.expanded = true; }
-                }
-            }
+        ui.on_always_show_reset_counter_changed(move |value| {
             if let Ok(mut cfg) = config_arc.lock() {
-                cfg.pin_short_global = value;
-                if value {
-                    for preference in &mut cfg.accounts { preference.expanded = true; }
-                }
+                cfg.always_show_reset_counter = value;
             }
             if let Some(ui) = ui_weak.upgrade() { render_ui(&ui, &accounts, &config_arc, &last_anchor, None); }
             send(&tx, WorkerCommand::PersistSettings);
@@ -2897,7 +2885,7 @@ mod tests {
             ..AppConfig::default()
         };
         let mut records = config.accounts.iter().enumerate()
-            .filter_map(|(index, preference)| placeholder_record(preference, index, false, None))
+            .filter_map(|(index, preference)| placeholder_record(preference, index, None))
             .collect::<Vec<_>>();
         let second_id = records[1].id.clone();
 
@@ -2909,7 +2897,7 @@ mod tests {
     }
 
     #[test]
-    fn placeholder_restores_saved_or_global_expansion() {
+    fn placeholder_restores_only_saved_expansion() {
         let root = std::env::temp_dir().join(format!("agents-usage-expanded-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
         fs::write(root.join("auth.json"), b"{}").unwrap();
@@ -2922,9 +2910,8 @@ mod tests {
             ..collapsed.clone()
         };
 
-        assert!(!placeholder_record(&collapsed, 0, false, None).unwrap().expanded);
-        assert!(placeholder_record(&expanded, 0, false, None).unwrap().expanded);
-        assert!(placeholder_record(&collapsed, 0, true, None).unwrap().expanded);
+        assert!(!placeholder_record(&collapsed, 0, None).unwrap().expanded);
+        assert!(placeholder_record(&expanded, 0, None).unwrap().expanded);
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -2943,7 +2930,7 @@ mod tests {
             reset_credits: Vec::new(),
         };
 
-        let record = placeholder_record(&preference, 0, false, Some(snapshot)).unwrap();
+        let record = placeholder_record(&preference, 0, Some(snapshot)).unwrap();
         assert_eq!(record.email(), "cached@example.com");
 
         fs::remove_dir_all(root).unwrap();

@@ -36,6 +36,7 @@ import android.webkit.WebViewClient;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.ImageButton;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -65,10 +66,13 @@ public final class MainActivity extends Activity {
     private static final int SURFACE = Color.rgb(32, 33, 36);
     private static final int CONTROL = Color.rgb(42, 44, 48);
     private static final int BORDER = Color.rgb(67, 70, 75);
-    private static final int PRIMARY = Color.rgb(39, 191, 206);
     private static final int TEXT = Color.rgb(243, 243, 243);
+    private static final int PRIMARY = TEXT;
+    private static final int PRIMARY_TEXT = Color.rgb(18, 19, 21);
     private static final int MUTED = Color.rgb(166, 168, 172);
     private static final int DANGER = Color.rgb(255, 181, 191);
+    private static final int DANGER_FILL = Color.rgb(176, 48, 63);
+    private static final int DANGER_BORDER = Color.rgb(216, 72, 88);
     private static final int HEALTH_TIMEOUT_MS = 3000;
     private static final long HEALTH_INTERVAL_MS = 15000;
 
@@ -85,6 +89,7 @@ public final class MainActivity extends Activity {
     private EditText pairingInput;
     private TextView noticeView;
     private LinearLayout endpointList;
+    private ImageButton setupBackButton;
     private EndpointParser.ParsedEndpoint pendingPairing;
     private String pairingPreferredBase;
     private boolean mainFrameFailed;
@@ -257,23 +262,29 @@ public final class MainActivity extends Activity {
         header.setGravity(Gravity.CENTER_VERTICAL);
         header.setPadding(dp(12), 0, dp(12), 0);
         shell.addView(header, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(52)));
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(56)));
+
+        setupBackButton = new ImageButton(this);
+        setupBackButton.setImageResource(R.drawable.ic_arrow_back);
+        setupBackButton.setContentDescription("Back to usage");
+        setupBackButton.setPadding(dp(9), dp(9), dp(9), dp(9));
+        setupBackButton.setBackgroundColor(Color.TRANSPARENT);
+        setupBackButton.setOnClickListener(view -> connectToPreferredEndpoint());
+        LinearLayout.LayoutParams backParams = new LinearLayout.LayoutParams(dp(40), dp(40));
+        backParams.setMargins(dp(-7), 0, dp(3), 0);
+        header.addView(setupBackButton, backParams);
 
         ImageView icon = new ImageView(this);
-        icon.setImageResource(R.mipmap.ic_launcher);
+        icon.setImageResource(R.drawable.ic_agents_usage_mark);
         icon.setContentDescription(null);
         header.addView(icon, new LinearLayout.LayoutParams(dp(22), dp(22)));
 
-        TextView appTitle = text("Agents usage", 15, TEXT);
+        TextView appTitle = text("Agents Usage", 15, TEXT);
         appTitle.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         LinearLayout.LayoutParams appTitleParams = new LinearLayout.LayoutParams(
                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1);
         appTitleParams.setMargins(dp(9), 0, 0, 0);
         header.addView(appTitle, appTitleParams);
-
-        View status = new View(this);
-        status.setBackground(circleBackground(Color.rgb(107, 112, 120)));
-        header.addView(status, new LinearLayout.LayoutParams(dp(7), dp(7)));
 
         View divider = new View(this);
         divider.setBackgroundColor(BORDER);
@@ -291,12 +302,28 @@ public final class MainActivity extends Activity {
         content.addView(title);
 
         TextView explanation = text(
-                "In desktop Settings, enable Phone companion and scan its QR code with your camera. "
-                        + "If you copied the private link instead, paste it here. LAN and Tailscale can be paired together.",
+                "Pair once, then this app automatically finds the working LAN or Tailscale route whenever you open it.",
                 14, MUTED);
         explanation.setLineSpacing(dp(3), 1.0f);
-        explanation.setPadding(0, dp(12), 0, dp(18));
+        explanation.setPadding(0, dp(10), 0, dp(22));
         content.addView(explanation);
+
+        content.addView(sectionLabel("1  ON YOUR DESKTOP"));
+        TextView desktopHelp = text(
+                "Open Settings → Phone companion, turn it on, then choose Show pairing QR.",
+                13, MUTED);
+        desktopHelp.setLineSpacing(dp(2), 1.0f);
+        desktopHelp.setPadding(0, dp(7), 0, dp(18));
+        content.addView(desktopHelp);
+
+        content.addView(sectionLabel("2  ON THIS PHONE"));
+        TextView phoneHelp = text(
+                "Scan the QR code with your camera. Agents Usage opens and pairs automatically. "
+                        + "If you copied the link, use Paste & pair below.",
+                13, MUTED);
+        phoneHelp.setLineSpacing(dp(2), 1.0f);
+        phoneHelp.setPadding(0, dp(7), 0, dp(12));
+        content.addView(phoneHelp);
 
         pairingInput = new EditText(this);
         pairingInput.setHint("https://desktop.example.ts.net/agents-usage/pair?token=…");
@@ -316,8 +343,8 @@ public final class MainActivity extends Activity {
         actions.setOrientation(LinearLayout.HORIZONTAL);
         actions.setGravity(Gravity.END);
         actions.setPadding(0, dp(10), 0, 0);
-        Button paste = button("Paste", CONTROL);
-        paste.setOnClickListener(view -> pastePairingLink());
+        Button paste = button("Paste & pair", CONTROL);
+        paste.setOnClickListener(view -> pasteAndPair());
         actions.addView(paste);
         Button connect = button("Pair", PRIMARY);
         LinearLayout.LayoutParams connectParams = new LinearLayout.LayoutParams(
@@ -332,7 +359,7 @@ public final class MainActivity extends Activity {
         noticeView.setVisibility(View.GONE);
         content.addView(noticeView);
 
-        TextView savedTitle = text("SAVED CONNECTIONS", 12, MUTED);
+        TextView savedTitle = text("SAVED DESKTOPS", 12, MUTED);
         savedTitle.setLetterSpacing(0.12f);
         savedTitle.setPadding(0, dp(30), 0, dp(9));
         content.addView(savedTitle);
@@ -342,8 +369,8 @@ public final class MainActivity extends Activity {
         content.addView(endpointList);
 
         TextView help = text(
-                "The one-time link expires after 10 minutes. Once paired, this phone stays connected until you remove it. "
-                        + "Use the Connections icon or Android Back to return here.",
+                "Pairing links expire after 10 minutes. Saved desktops stay paired until you remove them. "
+                        + "The app tests the last working route first and switches automatically when needed.",
                 13, MUTED);
         help.setLineSpacing(dp(2), 1.0f);
         help.setPadding(0, dp(24), 0, 0);
@@ -357,7 +384,7 @@ public final class MainActivity extends Activity {
         updates.setOnClickListener(view -> startActivity(new Intent(
                 Intent.ACTION_VIEW, Uri.parse("https://github.com/rayan6ms/agents-usage/releases/latest"))));
 
-        TextView version = text("Companion " + BuildConfig.VERSION_NAME, 12, MUTED);
+        TextView version = text("Agents Usage " + BuildConfig.VERSION_NAME, 12, MUTED);
         version.setGravity(Gravity.CENTER_HORIZONTAL);
         version.setPadding(0, dp(9), 0, 0);
         content.addView(version);
@@ -563,16 +590,17 @@ public final class MainActivity extends Activity {
             return;
         }
         noticeView.setText(message);
-        noticeView.setTextColor(error ? DANGER : PRIMARY);
+        noticeView.setTextColor(error ? DANGER : TEXT);
         noticeView.setBackground(roundedBackground(
-                error ? Color.rgb(50, 32, 37) : Color.rgb(25, 45, 48),
-                error ? Color.rgb(113, 64, 74) : Color.rgb(45, 91, 97),
+                error ? Color.rgb(50, 32, 37) : CONTROL,
+                error ? Color.rgb(113, 64, 74) : BORDER,
                 7));
         noticeView.setVisibility(View.VISIBLE);
     }
 
     private void renderEndpoints() {
         endpointList.removeAllViews();
+        setupBackButton.setVisibility(endpointBases.isEmpty() ? View.GONE : View.VISIBLE);
         if (endpointBases.isEmpty()) {
             TextView empty = text("No desktops paired yet.", 14, MUTED);
             empty.setPadding(0, dp(8), 0, dp(8));
@@ -581,8 +609,8 @@ public final class MainActivity extends Activity {
         }
         for (String base : new ArrayList<>(endpointBases)) {
             LinearLayout row = new LinearLayout(this);
-            row.setGravity(Gravity.CENTER_VERTICAL);
-            row.setPadding(dp(12), dp(9), dp(6), dp(9));
+            row.setOrientation(LinearLayout.VERTICAL);
+            row.setPadding(dp(12), dp(11), dp(12), dp(11));
             row.setBackground(roundedBackground(CONTROL, BORDER, 8));
 
             LinearLayout labels = new LinearLayout(this);
@@ -591,9 +619,15 @@ public final class MainActivity extends Activity {
             TextView url = text(base, 12, MUTED);
             labels.addView(host);
             labels.addView(url);
-            row.addView(labels, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+            row.addView(labels, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-            Button use = button("Use", PRIMARY);
+            LinearLayout endpointActions = new LinearLayout(this);
+            endpointActions.setOrientation(LinearLayout.HORIZONTAL);
+            endpointActions.setGravity(Gravity.END);
+            endpointActions.setPadding(0, dp(10), 0, 0);
+
+            Button use = button("Connect", PRIMARY);
             use.setOnClickListener(view -> {
                 attemptedBases.clear();
                 pendingPairing = null;
@@ -601,11 +635,14 @@ public final class MainActivity extends Activity {
                 candidate.add(base);
                 probeAndLoad(candidate, "That desktop could not be reached.");
             });
-            row.addView(use);
-            Button remove = button("Remove", CONTROL);
-            remove.setTextColor(DANGER);
+            endpointActions.addView(use);
+            Button remove = dangerButton("Remove");
             remove.setOnClickListener(view -> removeEndpoint(base));
-            row.addView(remove);
+            LinearLayout.LayoutParams removeParams = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            removeParams.setMargins(dp(8), 0, 0, 0);
+            endpointActions.addView(remove, removeParams);
+            row.addView(endpointActions);
 
             LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -658,7 +695,7 @@ public final class MainActivity extends Activity {
         return null;
     }
 
-    private void pastePairingLink() {
+    private void pasteAndPair() {
         ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
         if (clipboard == null || !clipboard.hasPrimaryClip()) {
             showSetup("The clipboard is empty.");
@@ -673,6 +710,7 @@ public final class MainActivity extends Activity {
         pairingInput.setText(value.toString().trim());
         pairingInput.setSelection(pairingInput.length());
         noticeView.setVisibility(View.GONE);
+        beginPairing(pairingInput.getText().toString());
     }
 
     private void hideKeyboard() {
@@ -726,10 +764,17 @@ public final class MainActivity extends Activity {
         return view;
     }
 
+    private TextView sectionLabel(String value) {
+        TextView view = text(value, 12, TEXT);
+        view.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        view.setLetterSpacing(0.08f);
+        return view;
+    }
+
     private Button button(String label, int background) {
         Button view = new Button(this);
         view.setText(label);
-        view.setTextColor(background == PRIMARY ? Color.rgb(7, 32, 35) : TEXT);
+        view.setTextColor(background == PRIMARY ? PRIMARY_TEXT : TEXT);
         view.setTextSize(13);
         view.setAllCaps(false);
         view.setMinWidth(0);
@@ -742,18 +787,21 @@ public final class MainActivity extends Activity {
         return view;
     }
 
+    private Button dangerButton(String label) {
+        Button view = button(label, DANGER_FILL);
+        view.setTextColor(Color.WHITE);
+        view.setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_delete, 0, 0, 0);
+        view.setCompoundDrawablePadding(dp(7));
+        view.setBackground(roundedBackground(DANGER_FILL, DANGER_BORDER, 8));
+        view.setContentDescription("Remove saved desktop");
+        return view;
+    }
+
     private GradientDrawable roundedBackground(int fill, int stroke, int radius) {
         GradientDrawable background = new GradientDrawable();
         background.setColor(fill);
         background.setCornerRadius(dp(radius));
         background.setStroke(dp(1), stroke);
-        return background;
-    }
-
-    private GradientDrawable circleBackground(int fill) {
-        GradientDrawable background = new GradientDrawable();
-        background.setShape(GradientDrawable.OVAL);
-        background.setColor(fill);
         return background;
     }
 

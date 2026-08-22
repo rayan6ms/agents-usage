@@ -9,7 +9,7 @@ pub const PANEL_BOTTOM_PADDING: f32 = 17.0;
 pub const EMPTY_CONTENT_HEIGHT: f32 = 72.0;
 pub const PANEL_MAX_HEIGHT: f32 = 680.0;
 
-pub fn account_view(record: &AccountRecord, enabled_count: usize, pin_short_global: bool) -> AccountView {
+pub fn account_view(record: &AccountRecord, enabled_count: usize) -> AccountView {
     let snapshot = record.snapshot.as_ref();
     let mut windows: Vec<&RateWindow> = snapshot
         .map(|snapshot| snapshot.windows.iter().collect())
@@ -25,7 +25,7 @@ pub fn account_view(record: &AccountRecord, enabled_count: usize, pin_short_glob
     let accent = if enabled_count <= 1 { provider_color } else { account_color };
     let show_accent = enabled_count > 1;
 
-    let pin_short = (pin_short_global || record.pin_short) && short.is_some();
+    let pin_short = record.pin_short && short.is_some();
     let reset_count = snapshot.map(|value| value.reset_available_count).unwrap_or(0);
     let mut credits = Vec::new();
     if let Some(snapshot) = snapshot {
@@ -127,7 +127,7 @@ pub fn account_view(record: &AccountRecord, enabled_count: usize, pin_short_glob
     }
 }
 
-pub fn panel_height(records: &[AccountRecord], pin_short_global: bool) -> f32 {
+pub fn panel_height(records: &[AccountRecord]) -> f32 {
     let enabled_count = records.iter().filter(|record| record.enabled).count();
     if enabled_count == 0 {
         return PANEL_HEADER_HEIGHT + EMPTY_CONTENT_HEIGHT;
@@ -135,16 +135,16 @@ pub fn panel_height(records: &[AccountRecord], pin_short_global: bool) -> f32 {
     let rows = records
         .iter()
         .filter(|record| record.enabled)
-        .map(|record| account_view(record, enabled_count, pin_short_global).row_height_px)
+        .map(|record| account_view(record, enabled_count).row_height_px)
         .sum::<f32>();
     (PANEL_HEADER_HEIGHT + rows + PANEL_BOTTOM_PADDING).clamp(128.0, PANEL_MAX_HEIGHT)
 }
 
-pub fn model(records: &[AccountRecord], pin_short_global: bool) -> (ModelRc<AccountView>, usize) {
+pub fn model(records: &[AccountRecord]) -> (ModelRc<AccountView>, usize) {
     let enabled_count = records.iter().filter(|record| record.enabled).count();
     let rows = records
         .iter()
-        .map(|record| account_view(record, enabled_count, pin_short_global))
+        .map(|record| account_view(record, enabled_count))
         .collect::<Vec<_>>();
     (Rc::new(VecModel::from(rows)).into(), enabled_count)
 }

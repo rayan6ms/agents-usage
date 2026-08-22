@@ -4,7 +4,7 @@ The phone companion is a read-only view of usage already collected by the deskto
 
 ## Requirements and supported configurations
 
-- Agents Usage 0.3.0 or newer, running in a logged-in desktop session.
+- Agents Usage 0.3.1 or newer, running in a logged-in desktop session.
 - Android 8.0/API 26 or newer with Android System WebView enabled.
 - For LAN: both devices on the same private network without guest/client isolation.
 - For remote access: Tailscale on both devices, signed into the same tailnet.
@@ -28,6 +28,8 @@ c9a8159f30df08f5b5613ea0b438d4746c292f600aca3bc9ab48f5c5d7a540bf
 
 GitHub releases contain one Android app. Developer-only debug builds use a separate package ID and are never attached to a release.
 
+If an older browser shortcut named **Usage** is still on the launcher, it is a Brave/Chrome shortcut rather than another Agents Usage package. Remove that shortcut once and keep the native **Agents Usage** app with the dark-and-white robot icon. New setup instructions do not create a browser shortcut.
+
 ## 2. Pair from desktop settings
 
 1. Open Agents Usage **Settings**.
@@ -41,8 +43,8 @@ GitHub releases contain one Android app. Developer-only debug builds use a separ
 
    - For direct same-network access, turn on **Allow direct LAN**. This changes the listener to all local interfaces; only do this on a network you trust.
 
-4. Press **Pair a phone**. The desktop detects its primary private LAN route and Tailscale DNS name and creates one QR code containing the available addresses.
-5. Scan the QR code with the phone's normal camera. If its camera does not open custom links, use **Copy private link**, transfer it through a trusted channel, then paste it into the Android app.
+4. Press **Show pairing QR**. The desktop detects its primary private LAN route and Tailscale DNS name and creates one QR code containing the available addresses.
+5. Scan the QR code with the phone's normal camera. The native app opens and pairs automatically. If its camera does not open custom links, use **Copy private link**, transfer it through a trusted channel, then press **Paste & pair** in the Android app.
 
 The link expires after ten minutes. The phone pairs each included origin, saves only the non-secret base addresses, tests them through an authenticated health endpoint, and opens the first working one.
 
@@ -59,10 +61,10 @@ These prompts protect system or network boundaries and are intentionally not byp
 
 The Android app health-checks the current endpoint every 15 seconds and whenever Android reports a network change. It does not rely on a cached web page to decide whether the desktop is reachable. If LAN fails, it probes Tailscale; when LAN returns it continues using the current healthy route until a reconnect is needed.
 
-Tap the visible Connections icon in the usage header, or press Android Back, to manage addresses:
+Tap the visible Connections icon in the usage header to manage addresses. The setup screen has a visible Back button, and Android Back has the same behavior:
 
-- **Use** probes and selects an address.
-- **Remove** deletes the saved address and its cookie from the phone.
+- **Connect** probes and selects an address.
+- The red **Remove** action deletes the saved address and its cookie from the phone.
 - **Check for app updates** opens only the official GitHub releases page.
 
 Removing an address locally does not revoke other sessions for that phone. To invalidate the phone everywhere, use **Revoke** beside it in desktop settings. LAN and Tailscale cookies issued during one QR pairing are grouped as one phone.
