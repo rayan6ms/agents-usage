@@ -477,6 +477,7 @@ component AccountRow inherits Rectangle {
     in property <bool> blur-names: false;
     in property <bool> blur-emails: false;
     in property <bool> color-reset-timers: false;
+    in property <bool> always-show-reset-counter: false;
     in property <string> usage-bar-color-mode: "account";
     in property <color> usage-bar-custom-color: #27bfce;
     in property <bool> motion-enabled: true;
@@ -595,7 +596,7 @@ component AccountRow inherits Rectangle {
             accent: root.usage-bar-color(root.account.long-remaining);
             reset-text: root.account.long-reset-text;
             reset-color: root.account.long-reset-color;
-            show-reset-text: root.account.expanded && root.account.has-long-reset-time;
+            show-reset-text: (root.account.expanded || root.always-show-reset-counter) && root.account.has-long-reset-time;
             color-reset-timer: root.color-reset-timers;
         }
         if !root.account.has-usage: Text {
@@ -623,7 +624,7 @@ component AccountRow inherits Rectangle {
             accent: root.usage-bar-color(root.account.short-remaining);
             reset-text: root.account.short-reset-text;
             reset-color: root.account.short-reset-color;
-            show-reset-text: root.account.expanded && root.account.has-short-reset-time;
+            show-reset-text: (root.account.expanded || root.always-show-reset-counter) && root.account.has-short-reset-time;
             color-reset-timer: root.color-reset-timers;
         }
 
@@ -1163,7 +1164,7 @@ component MobileCompanionSettings inherits Rectangle {
         spacing: 4px;
         SettingRow {
             title: "Phone companion";
-            subtitle: root.enabled ? root.status : "Keep usage private and view-only on your phone";
+            subtitle: root.enabled ? root.status : "View live usage on Android over LAN or Tailscale";
             checked: root.enabled;
             changed(value) => { root.enabled-changed(value); }
         }
@@ -1179,7 +1180,7 @@ component MobileCompanionSettings inherits Rectangle {
         }
         if root.enabled: SettingRow {
             title: "Allow direct LAN";
-            subtitle: "Otherwise listen only on this computer for Tailscale Serve";
+            subtitle: "Use the same Wi-Fi; leave off for Tailscale-only access";
             checked: root.allow-lan;
             changed(value) => { root.allow-lan-changed(value); }
         }
@@ -1195,7 +1196,7 @@ component MobileCompanionSettings inherits Rectangle {
             height: 30px;
             spacing: 6px;
             MobileActionButton {
-                label: "Pair a phone";
+                label: "Show pairing QR";
                 primary: true;
                 clicked => { root.create-pairing(); }
             }
@@ -1231,7 +1232,7 @@ component MobileCompanionSettings inherits Rectangle {
                 }
                 Text {
                     vertical-stretch: 1;
-                    text: "This link expires in 10 minutes and can pair only the displayed LAN/Tailscale addresses.";
+                    text: "Agents Usage opens and pairs every available LAN/Tailscale address automatically. This QR expires in 10 minutes.";
                     color: Palette.foreground;
                     font-size: 8.5px;
                     opacity: 0.6;
@@ -1285,7 +1286,7 @@ export component MainWindow inherits Window {
     in-out property <bool> color-reset-timers: false;
     in-out property <string> usage-bar-color-mode: "account";
     in-out property <color> usage-bar-custom-color: #27bfce;
-    in-out property <bool> pin-short-global: false;
+    in-out property <bool> always-show-reset-counter: false;
     in-out property <bool> motion-enabled: true;
     in-out property <bool> refreshing: false;
     in-out property <bool> reset-busy: false;
@@ -1318,7 +1319,7 @@ export component MainWindow inherits Window {
     callback color-reset-timers-changed(bool);
     callback usage-bar-color-mode-changed(string);
     callback usage-bar-custom-color-changed(color);
-    callback pin-short-global-changed(bool);
+    callback always-show-reset-counter-changed(bool);
     callback account-enabled-changed(string, bool);
     callback account-pin-short-changed(string, bool);
     callback account-name-changed(string, string);
@@ -1433,6 +1434,7 @@ export component MainWindow inherits Window {
                         blur-names: root.blur-names;
                         blur-emails: root.blur-emails;
                         color-reset-timers: root.color-reset-timers;
+                        always-show-reset-counter: root.always-show-reset-counter;
                         usage-bar-color-mode: root.usage-bar-color-mode;
                         usage-bar-custom-color: root.usage-bar-custom-color;
                         motion-enabled: root.motion-enabled;
@@ -1514,10 +1516,10 @@ export component MainWindow inherits Window {
                             changed(value) => { root.color-reset-timers-changed(value); }
                         }
                         SettingRow {
-                            title: "Always show 5-hour limits";
-                            subtitle: "Show available short windows below weekly usage";
-                            checked: root.pin-short-global;
-                            changed(value) => { root.pin-short-global-changed(value); }
+                            title: "Always show reset counters";
+                            subtitle: "Keep countdowns visible while account details are collapsed";
+                            checked: root.always-show-reset-counter;
+                            changed(value) => { root.always-show-reset-counter-changed(value); }
                         }
                         UsageBarColorSettings {
                             mode: root.usage-bar-color-mode;

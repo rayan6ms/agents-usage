@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.1 — 2026-08-22
+
+- Replaced the global 5-hour expansion option with an independent reset-counter preference that keeps countdowns visible without opening account details.
+- Refined the Android connection screen with the canonical dark-and-white app icon, visible back navigation, neutral monochrome actions, a solid red icon-labeled Remove action, and clearer two-step pairing guidance.
+- Improved first-run pairing language and automatic LAN/Tailscale route selection, and documented how to distinguish and remove obsolete browser shortcuts from the single native Android app.
+
 ## 0.3.0 — 2026-08-21
 
 - Added an opt-in, token-protected phone view with the desktop's accounts, quota bars, countdowns, privacy choices, and Refresh action.

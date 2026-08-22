@@ -51,6 +51,7 @@ ext = (root / 'integration/gnome-shell/extension/extension.js').read_text()
 mobile_js = (root / 'mobile/app.js').read_text()
 mobile_css = (root / 'mobile/app.css').read_text()
 android_build = (root / 'mobile-android/app/build.gradle').read_text()
+android_main = (root / 'mobile-android/app/src/main/java/io/github/agentsusagetray/companion/MainActivity.java').read_text()
 release_workflow = (root / '.github/workflows/release.yml').read_text()
 
 assert 'account/rateLimits/read' in codex
@@ -88,6 +89,11 @@ assert 'StatusNotifierTray' in main and 'create_native_tray' in main
 assert 'MoveFileExW' in (root / 'src/config.rs').read_text()
 assert '<span class="reset-text"> • resets in <span class="reset-timer ' in mobile_js
 assert '.reset-timer.colored' in mobile_css and '.reset-text.colored' not in mobile_css
+assert 'always_show_reset_counter' in mobile_js and 'pin_short_global' not in mobile_js
+assert 'Always show reset counters' in ui and 'Always show 5-hour limits' not in ui
+assert 'Paste & pair' in android_main and 'Back to usage' in android_main
+assert 'dangerButton("Remove")' in android_main and 'R.drawable.ic_delete' in android_main
+assert 'Color.rgb(39, 191, 206)' not in android_main
 assert 'applicationId "io.github.agentsusagetray.companion"' in android_build
 assert 'applicationIdSuffix ".debug"' in android_build
 assert 'Agents-Usage-${version}-android.apk' in release_workflow

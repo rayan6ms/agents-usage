@@ -16,7 +16,7 @@ Windows and macOS builds are not production-signed or notarized yet, so the oper
 
 Launch Agents Usage, then click its tray icon to open the usage panel. The app discovers local Codex homes that contain account evidence and validates each candidate through Codex before displaying it.
 
-Settings let you rename, recolor, reorder, disable, and expand accounts. You can blur account names and emails, choose preset or custom account colors, and optionally color reset timers from red toward green as the reset approaches. Usage bars can follow each account color, shift from green to red as quota is spent, or share one custom color.
+Settings let you rename, recolor, reorder, disable, and expand accounts. You can blur account names and emails, keep reset counters visible without expanding account details, choose preset or custom account colors, and optionally color reset timers from red toward green as the reset approaches. Usage bars can follow each account color, shift from green to red as quota is spent, or share one custom color.
 
 Refreshes update accounts independently, preserve the last valid data when one account fails, and check for newly added Codex homes. The last valid usage is also cached locally so the panel has useful data immediately; a fresh check runs when the panel is opened or Refresh is pressed.
 
@@ -26,11 +26,11 @@ Agents Usage can serve a phone-sized companion while keeping Codex and all accou
 
 Download the **Agents Usage Android APK** from [GitHub Releases](https://github.com/rayan6ms/agents-usage/releases/latest). It supports Android 8.0 and newer and needs no account, root access, Termux, or USB connection.
 
-Open desktop **Settings → Phone companion** and turn it on. New installations listen only on the desktop loopback interface, which is the safest default for Tailscale Serve. Turn on **Allow direct LAN** only if you want same-network access, then press **Pair a phone**. Agents Usage detects the routes you enabled and displays one short-lived QR code for them. Scan it with the phone camera and the Android app tests each authenticated address before opening the usage view. No desktop restart or terminal is normally required.
+Open desktop **Settings → Phone companion** and turn it on. New installations listen only on the desktop loopback interface, which is the safest default for Tailscale Serve. Turn on **Allow direct LAN** only if you want same-network access, then press **Show pairing QR**. Agents Usage detects the routes you enabled and displays one short-lived QR code for them. Scan it with the phone camera: the native app opens, pairs every available LAN/Tailscale route, tests them, and shows the first working view automatically. No desktop restart, account sign-in, terminal, or USB connection is normally required.
 
 **Set up Tailscale** configures a private HTTPS path for access away from home. Tailscale must already be installed and signed into the same tailnet on both devices; an operating system may still request administrator approval. If explicitly enabled, direct LAN access uses TCP `3765`, so the desktop firewall may require one private-network approval. Never forward this port on a router and do not enable Tailscale Funnel.
 
-Each phone receives an independent session that remains connected until it is revoked from desktop settings or its app data is cleared. Pairing links expire after ten minutes, are valid only for the addresses included in that pairing operation, and are removed from the phone after use. Android health-checks the saved routes, switches between LAN and Tailscale after network changes, and exposes a visible Connections button.
+Each phone receives an independent session that remains connected until it is revoked from desktop settings or its app data is cleared. Pairing links expire after ten minutes, are valid only for the addresses included in that pairing operation, and are removed from the phone after use. Android health-checks the saved routes, switches between LAN and Tailscale after network changes, and exposes visible Connections and Back controls.
 
 Command-line controls remain available for recovery and scripted setups:
 

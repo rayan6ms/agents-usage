@@ -18,8 +18,8 @@ pub struct AppConfig {
     pub usage_bar_color_mode: UsageBarColorMode,
     #[serde(default = "default_usage_bar_custom_color")]
     pub usage_bar_custom_color: String,
-    #[serde(default)]
-    pub pin_short_global: bool,
+    #[serde(default, alias = "pin_short_global")]
+    pub always_show_reset_counter: bool,
     #[serde(default)]
     pub codex_executable: Option<PathBuf>,
     #[serde(default)]
@@ -39,7 +39,7 @@ impl Default for AppConfig {
             color_reset_timers: false,
             usage_bar_color_mode: UsageBarColorMode::default(),
             usage_bar_custom_color: default_usage_bar_custom_color(),
-            pin_short_global: false,
+            always_show_reset_counter: false,
             codex_executable: None,
             additional_codex_homes: Vec::new(),
             accounts: Vec::new(),
@@ -145,7 +145,23 @@ impl UsageBarColorMode {
 
 fn default_usage_bar_custom_color() -> String { "#27bfce".into() }
 
-fn schema_version() -> u32 { 1 }
+fn schema_version() -> u32 { 2 }
+
+pub fn migrate_display_preferences(config: &mut AppConfig) -> bool {
+    if config.schema_version >= schema_version() {
+        return false;
+    }
+    // The old global 5-hour option permanently expanded every account. When
+    // it was enabled, reset that derived state once and reinterpret the option
+    // as the non-expanding reset-counter preference.
+    if config.always_show_reset_counter {
+        for preference in &mut config.accounts {
+            preference.expanded = false;
+        }
+    }
+    config.schema_version = schema_version();
+    true
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AccountPreference {
@@ -386,7 +402,7 @@ fn preserve_invalid_file(path: &Path, label: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::{AccountPreference, AppConfig, MobileConfig, atomic_write};
+    use super::{AccountPreference, AppConfig, MobileConfig, atomic_write, migrate_display_preferences};
     use crate::domain::{CachedUsage, UsageSnapshot};
     use std::fs;
 
@@ -433,8 +449,32 @@ pin_short = false
         let config: AppConfig = toml::from_str("schema_version = 1\n").unwrap();
         assert!(!config.blur_names);
         assert!(!config.color_reset_timers);
+        assert!(!config.always_show_reset_counter);
         assert_eq!(config.usage_bar_color_mode, super::UsageBarColorMode::Account);
         assert_eq!(config.usage_bar_custom_color, "#27bfce");
+    }
+
+    #[test]
+    fn legacy_global_five_hour_setting_becomes_a_non_expanding_counter_setting() {
+        let mut config: AppConfig = toml::from_str(
+            r#"
+schema_version = 1
+pin_short_global = true
+
+[[accounts]]
+home = "/tmp/example"
+expanded = true
+"#,
+        )
+        .unwrap();
+
+        assert!(migrate_display_preferences(&mut config));
+        assert_eq!(config.schema_version, 2);
+        assert!(config.always_show_reset_counter);
+        assert!(!config.accounts[0].expanded);
+        let encoded = toml::to_string(&config).unwrap();
+        assert!(encoded.contains("always_show_reset_counter = true"));
+        assert!(!encoded.contains("pin_short_global"));
     }
 
     #[test]

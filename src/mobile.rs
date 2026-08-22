@@ -63,7 +63,7 @@ struct MobileSnapshot {
     color_reset_timers: bool,
     usage_bar_color_mode: String,
     usage_bar_custom_color: String,
-    pin_short_global: bool,
+    always_show_reset_counter: bool,
     accounts: Vec<MobileAccount>,
 }
 
@@ -333,7 +333,7 @@ async fn api_state(State(state): State<MobileServerState>, headers: HeaderMap) -
         color_reset_timers: config.color_reset_timers,
         usage_bar_color_mode: config.usage_bar_color_mode.as_str().into(),
         usage_bar_custom_color: config.usage_bar_custom_color,
-        pin_short_global: config.pin_short_global,
+        always_show_reset_counter: config.always_show_reset_counter,
         accounts,
     };
     let mut response = Json(snapshot).into_response();
@@ -736,6 +736,7 @@ mod tests {
     async fn pairing_is_one_time_and_issues_a_prefix_scoped_device_session() {
         let mut config = AppConfig::default();
         config.mobile.enabled = true;
+        config.always_show_reset_counter = true;
         let pairing_token = create_pairing(&mut config, 1);
         let config = Arc::new(Mutex::new(config));
         let (tx, mut rx) = unbounded_channel::<WorkerCommand>();
@@ -805,6 +806,8 @@ mod tests {
         assert!(!state_body.contains("token_hash"));
         assert!(!state_body.contains("codex_executable"));
         assert!(!state_body.contains("additional_codex_homes"));
+        assert!(state_body.contains("\"always_show_reset_counter\":true"));
+        assert!(!state_body.contains("pin_short_global"));
 
         let stale_refresh = app
             .clone()
