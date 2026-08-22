@@ -7,7 +7,10 @@ root = Path(__file__).resolve().parents[1]
 required = [
     'Cargo.toml', '.cargo/config.toml', 'build.rs', 'README.md', 'LICENSE', 'CHANGELOG.md',
     'src/main.rs', 'src/codex.rs', 'src/config.rs', 'src/discovery.rs',
-    'src/domain.rs', 'src/ui_model.rs', 'ui/app.slint',
+    'src/domain.rs', 'src/mobile.rs', 'src/ui_model.rs', 'ui/app.slint',
+    'mobile/index.html', 'mobile/app.css', 'mobile/app.js',
+    'mobile/manifest.webmanifest', 'mobile/sw.js',
+    'mobile/icon-192.png', 'mobile/icon-512.png',
     'integration/gnome-shell/extension/extension.js',
     'integration/gnome-shell/extension/metadata.json',
     'packaging/linux/agents-usage.desktop.in',
@@ -45,6 +48,10 @@ main = (root / 'src/main.rs').read_text()
 codex = (root / 'src/codex.rs').read_text()
 ui = (root / 'ui/app.slint').read_text()
 ext = (root / 'integration/gnome-shell/extension/extension.js').read_text()
+mobile_js = (root / 'mobile/app.js').read_text()
+mobile_css = (root / 'mobile/app.css').read_text()
+android_build = (root / 'mobile-android/app/build.gradle').read_text()
+release_workflow = (root / '.github/workflows/release.yml').read_text()
 
 assert 'account/rateLimits/read' in codex
 assert 'READ_ATTEMPTS: usize = 3' in codex
@@ -53,7 +60,8 @@ assert 'experimentalApi": false' in codex
 assert '"name": "agents-usage"' in codex
 assert 'discover_new_accounts' in main and 'refresh_known_accounts' in main
 assert 'RefreshIfStale' in main and 'OPEN_REFRESH_FRESHNESS' in main
-assert 'launch_mode(std::env::args_os().skip(1))' in main
+assert 'let open_on_start = launch_mode(arguments)' in main
+assert 'mobile::serve' in main and '--mobile-pairing-url' in main
 assert 'activate_existing_instance_async(open_on_start)' in main
 assert 'RefreshAtStartup' not in main
 assert 'STARTUP_REFRESH_DELAY' not in main
@@ -78,6 +86,12 @@ assert 'padding-top: 8px' in ui
 assert 'Personal' not in ui and 'team@anthropic.example' not in ui
 assert 'StatusNotifierTray' in main and 'create_native_tray' in main
 assert 'MoveFileExW' in (root / 'src/config.rs').read_text()
+assert '<span class="reset-text"> • resets in <span class="reset-timer ' in mobile_js
+assert '.reset-timer.colored' in mobile_css and '.reset-text.colored' not in mobile_css
+assert 'applicationId "io.github.agentsusagetray.companion"' in android_build
+assert 'applicationIdSuffix ".debug"' in android_build
+assert 'Agents-Usage-${version}-android.apk' in release_workflow
+assert not (root / 'tools/backup-android-signing-key.sh').exists()
 
 for rel in ['src/main.rs', 'src/codex.rs', 'ui/app.slint', 'integration/gnome-shell/extension/extension.js']:
     text = (root / rel).read_text()

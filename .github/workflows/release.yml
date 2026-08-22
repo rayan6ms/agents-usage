@@ -2,6 +2,12 @@ name: Release packages
 
 on:
   workflow_dispatch:
+    inputs:
+      sign_android:
+        description: Build and verify a signed Android preflight artifact
+        required: false
+        type: boolean
+        default: false
   push:
     tags: ["v*"]
 
@@ -12,8 +18,13 @@ jobs:
   verify:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - run: rustup show active-toolchain
+      - name: Verify tag matches the package version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          package_version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "agents-usage") | .version')
+          test "$GITHUB_REF_NAME" = "v$package_version"
       - run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev libxkbcommon-x11-dev
       - run: cargo test --locked
       - run: cargo clippy --locked -- -D warnings
@@ -23,14 +34,14 @@ jobs:
     needs: verify
     runs-on: windows-2025
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - run: rustup show active-toolchain
       - run: cargo test --locked
       - run: cargo clippy --locked -- -D warnings
       - run: cargo build --release --locked
       - shell: pwsh
         run: ./tools/package-windows.ps1
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: agents-usage-windows-x86_64
           path: dist/packages/*.zip
@@ -40,7 +51,7 @@ jobs:
     needs: verify
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - run: rustup show active-toolchain
       - run: rustup target add x86_64-apple-darwin
       - run: cargo test --locked
@@ -53,7 +64,7 @@ jobs:
             target/x86_64-apple-darwin/release/agents-usage \
             -output target/universal2/release/agents-usage
       - run: ./tools/package-macos.sh target/universal2/release/agents-usage
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: agents-usage-macos-universal
           path: |
@@ -65,7 +76,7 @@ jobs:
     needs: verify
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - run: rustup show active-toolchain
       - run: |
           sudo apt-get update
@@ -73,7 +84,7 @@ jobs:
           sudo flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
           sudo flatpak install -y flathub org.freedesktop.Platform//25.08 org.freedesktop.Sdk//25.08
       - run: ./tools/package-linux.sh
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: agents-usage-linux-x86_64
           path: |
@@ -81,14 +92,82 @@ jobs:
             dist/agents-usage-*-linux-*.tar.gz
           if-no-files-found: error
 
+  android:
+    needs: verify
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+          cache-dependency-path: |
+            mobile-android/*.gradle
+            mobile-android/gradle/wrapper/gradle-wrapper.properties
+            mobile-android/app/*.gradle
+      - uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4
+        with:
+          packages: "platform-tools platforms;android-36 build-tools;35.0.0"
+      - name: Test, lint, and assemble debug APK
+        run: ./mobile-android/gradlew --no-daemon -p mobile-android testDebugUnitTest lintDebug assembleDebug
+      - name: Check release signing secrets
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.sign_android
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          test -n "$ANDROID_KEYSTORE_BASE64"
+          test -n "$ANDROID_KEYSTORE_PASSWORD"
+          test -n "$ANDROID_KEY_ALIAS"
+          test -n "$ANDROID_KEY_PASSWORD"
+      - name: Build signed release APK
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.sign_android
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/agents-usage-release.jks
+        run: |
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$ANDROID_KEYSTORE_PATH"
+          ./mobile-android/gradlew --no-daemon -p mobile-android assembleRelease
+          mkdir -p dist/android
+          version="${GITHUB_REF_NAME#v}"
+          if [[ "$GITHUB_REF" != refs/tags/v* ]]; then version="signed-preflight"; fi
+          apk="dist/android/Agents-Usage-${version}-android.apk"
+          cp mobile-android/app/build/outputs/apk/release/app-release.apk "$apk"
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose \
+            --print-certs "$apk"
+          actual_cert=$("$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --print-certs "$apk" \
+            | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | tr '[:upper:]' '[:lower:]')
+          expected_cert="c9a8159f30df08f5b5613ea0b438d4746c292f600aca3bc9ab48f5c5d7a540bf"
+          test "$actual_cert" = "$expected_cert"
+          cd dist/android
+          sha256sum ./*.apk > "Agents-Usage-${version}-android.apk.sha256"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.sign_android
+        with:
+          name: agents-usage-android
+          path: dist/android/*
+          if-no-files-found: error
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') && !inputs.sign_android }}
+        with:
+          name: agents-usage-android-debug
+          path: mobile-android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [linux, windows, macos]
+    needs: [linux, windows, macos, android]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           path: release-assets
           merge-multiple: true

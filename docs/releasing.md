@@ -1,0 +1,20 @@
+# Release checklist
+
+## Android signing
+
+Android requires every update to use the same signing certificate as the installed app. GitHub Actions handles signing automatically from repository secrets and verifies this certificate SHA-256 fingerprint before it publishes an APK:
+
+   ```text
+   c9a8159f30df08f5b5613ea0b438d4746c292f600aca3bc9ab48f5c5d7a540bf
+   ```
+
+There is no encrypted-key backup step in the project and no signing-key handling in the normal release flow. The keystore and passwords must not be committed to the repository.
+
+## Preflight
+
+1. Open a pull request and let CI run the desktop checks plus Android unit, lint, API 26, and current-API tests.
+2. Dispatch **Release packages** with **Build and verify a signed Android preflight artifact** enabled. The workflow tests every platform and verifies the APK certificate and checksum.
+3. After the preflight succeeds, merge and push a version tag matching `Cargo.toml` (for example, `v0.3.0`).
+4. The tag workflow creates the GitHub release and uploads every desktop package, the signed APK, and its checksum.
+
+GitHub Actions are pinned to full commits and the Gradle wrapper verifies its distribution checksum. Dependabot or an equivalent reviewed change should update those pins deliberately.

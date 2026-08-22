@@ -221,7 +221,7 @@ fn format_expiry(timestamp: i64, now: i64) -> String {
     if days > 0 { format!("Expires {date_text} · {days} days") } else { format!("Expires {date_text}") }
 }
 
-fn mask_email(email: &str) -> String {
+pub(crate) fn mask_email(email: &str) -> String {
     let Some((local, domain)) = email.split_once('@') else {
         if email.is_empty() { return String::new(); }
         let first = email.chars().next().unwrap_or('•');
@@ -232,7 +232,7 @@ fn mask_email(email: &str) -> String {
     format!("{first}{}@{domain}", "•".repeat(count))
 }
 
-fn mask_account_name(name: &str) -> String {
+pub(crate) fn mask_account_name(name: &str) -> String {
     let mut characters = name.chars();
     let Some(first) = characters.next() else { return String::new(); };
     let hidden = characters.count().clamp(3, 10);

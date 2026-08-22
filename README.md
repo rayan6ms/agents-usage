@@ -20,6 +20,30 @@ Settings let you rename, recolor, reorder, disable, and expand accounts. You can
 
 Refreshes update accounts independently, preserve the last valid data when one account fails, and check for newly added Codex homes. The last valid usage is also cached locally so the panel has useful data immediately; a fresh check runs when the panel is opened or Refresh is pressed.
 
+## Phone companion
+
+Agents Usage can serve a phone-sized companion while keeping Codex and all account credentials on the desktop. The companion displays the same enabled accounts, colors, quotas, countdowns, and privacy choices. Its only desktop action is Refresh; settings and reset-credit actions are intentionally unavailable.
+
+Download the **Agents Usage Android APK** from [GitHub Releases](https://github.com/rayan6ms/agents-usage/releases/latest). It supports Android 8.0 and newer and needs no account, root access, Termux, or USB connection.
+
+Open desktop **Settings → Phone companion** and turn it on. New installations listen only on the desktop loopback interface, which is the safest default for Tailscale Serve. Turn on **Allow direct LAN** only if you want same-network access, then press **Pair a phone**. Agents Usage detects the routes you enabled and displays one short-lived QR code for them. Scan it with the phone camera and the Android app tests each authenticated address before opening the usage view. No desktop restart or terminal is normally required.
+
+**Set up Tailscale** configures a private HTTPS path for access away from home. Tailscale must already be installed and signed into the same tailnet on both devices; an operating system may still request administrator approval. If explicitly enabled, direct LAN access uses TCP `3765`, so the desktop firewall may require one private-network approval. Never forward this port on a router and do not enable Tailscale Funnel.
+
+Each phone receives an independent session that remains connected until it is revoked from desktop settings or its app data is cleared. Pairing links expire after ten minutes, are valid only for the addresses included in that pairing operation, and are removed from the phone after use. Android health-checks the saved routes, switches between LAN and Tailscale after network changes, and exposes a visible Connections button.
+
+Command-line controls remain available for recovery and scripted setups:
+
+```bash
+agents-usage --mobile-enable
+agents-usage --mobile-pairing-url http://192.168.1.20:3765
+agents-usage --mobile-pairing-url https://desktop.example.ts.net/agents-usage
+agents-usage --mobile-rotate-token   # revokes every paired phone
+agents-usage --mobile-disable
+```
+
+See the [complete phone setup and troubleshooting guide](docs/mobile-companion.md) for APK verification, system-specific firewall notes, CLI recovery, updates, connection management, and the full support/security model.
+
 ## Current limitations
 
 - Remaining-quota reporting currently supports OpenAI accounts through Codex only.
@@ -35,6 +59,15 @@ Rust 1.92 or newer is required.
 cargo test --locked
 cargo build --release --locked
 ```
+
+The Android companion additionally requires JDK 17 and the Android SDK. Its checked-in Gradle wrapper verifies the downloaded Gradle distribution:
+
+```bash
+cd mobile-android
+./gradlew --no-daemon test lintDebug assembleDebug
+```
+
+GitHub Actions signs release APKs automatically; see [the release checklist](docs/releasing.md). Android requires a stable signing certificate for updates, but maintainers do not handle an encrypted key backup as part of a release.
 
 ## License
 

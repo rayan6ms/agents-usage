@@ -53,6 +53,18 @@ export struct ColorChoice {
     value: color,
 }
 
+export struct MobileDeviceView {
+    id: string,
+    name: string,
+    detail: string,
+}
+
+export struct QrCell {
+    x: float,
+    y: float,
+    size: float,
+}
+
 component AccentDot inherits Rectangle {
     in property <color> accent;
     background: root.accent;
@@ -1100,6 +1112,164 @@ component AccountSettings inherits Rectangle {
     }
 }
 
+component MobileActionButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> primary: false;
+    callback clicked();
+    height: 28px;
+    min-width: 72px;
+    horizontal-stretch: 1;
+    border-radius: 5px;
+    border-width: 1px;
+    border-color: Palette.border;
+    background: root.primary ? Palette.foreground : area.has-hover ? Palette.alternate-background : transparent;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-action-default => { root.clicked(); }
+    Text {
+        text: root.label;
+        color: root.primary ? Palette.background : Palette.foreground;
+        font-size: 9px;
+        font-weight: root.primary ? 600 : 400;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    area := TouchArea { clicked => { root.clicked(); } }
+}
+
+component MobileCompanionSettings inherits Rectangle {
+    in-out property <bool> enabled;
+    in-out property <bool> allow-lan;
+    in property <string> status;
+    in property <string> lan-url;
+    in property <string> tailscale-url;
+    in property <string> pairing-link;
+    in property <[MobileDeviceView]> devices;
+    in property <[QrCell]> qr-cells;
+    callback enabled-changed(bool);
+    callback allow-lan-changed(bool);
+    callback create-pairing();
+    callback copy-pairing();
+    callback configure-tailscale();
+    callback revoke-device(string);
+    height: root.enabled
+        ? (root.pairing-link == "" ? 199px : 379px) + root.devices.length * 38px
+        : 58px;
+    background: transparent;
+
+    VerticalLayout {
+        width: parent.width;
+        height: parent.height;
+        spacing: 4px;
+        SettingRow {
+            title: "Phone companion";
+            subtitle: root.enabled ? root.status : "Keep usage private and view-only on your phone";
+            checked: root.enabled;
+            changed(value) => { root.enabled-changed(value); }
+        }
+        if root.enabled: Text {
+            height: 16px;
+            text: !root.allow-lan
+                ? "LAN · access off"
+                : root.lan-url == "" ? "LAN address unavailable" : "LAN · " + root.lan-url;
+            color: Palette.foreground;
+            font-size: 8.5px;
+            opacity: 0.62;
+            overflow: elide;
+        }
+        if root.enabled: SettingRow {
+            title: "Allow direct LAN";
+            subtitle: "Otherwise listen only on this computer for Tailscale Serve";
+            checked: root.allow-lan;
+            changed(value) => { root.allow-lan-changed(value); }
+        }
+        if root.enabled: Text {
+            height: 16px;
+            text: root.tailscale-url == "" ? "Tailscale · not detected" : "Tailscale · " + root.tailscale-url;
+            color: Palette.foreground;
+            font-size: 8.5px;
+            opacity: 0.62;
+            overflow: elide;
+        }
+        if root.enabled: HorizontalLayout {
+            height: 30px;
+            spacing: 6px;
+            MobileActionButton {
+                label: "Pair a phone";
+                primary: true;
+                clicked => { root.create-pairing(); }
+            }
+            MobileActionButton {
+                label: "Set up Tailscale";
+                clicked => { root.configure-tailscale(); }
+            }
+        }
+        if root.enabled && root.pairing-link != "": HorizontalLayout {
+            height: 166px;
+            spacing: 10px;
+            Rectangle {
+                width: 156px;
+                height: 156px;
+                background: white;
+                border-radius: 5px;
+                for cell in root.qr-cells: Rectangle {
+                    x: cell.x * 1px;
+                    y: cell.y * 1px;
+                    width: cell.size * 1px;
+                    height: cell.size * 1px;
+                    background: black;
+                }
+            }
+            VerticalLayout {
+                spacing: 5px;
+                Text {
+                    text: "Scan with your phone camera";
+                    color: Palette.foreground;
+                    font-size: 10px;
+                    font-weight: 600;
+                    wrap: word-wrap;
+                }
+                Text {
+                    vertical-stretch: 1;
+                    text: "This link expires in 10 minutes and can pair only the displayed LAN/Tailscale addresses.";
+                    color: Palette.foreground;
+                    font-size: 8.5px;
+                    opacity: 0.6;
+                    wrap: word-wrap;
+                }
+                MobileActionButton {
+                    label: "Copy private link";
+                    clicked => { root.copy-pairing(); }
+                }
+            }
+        }
+        if root.enabled && root.devices.length > 0: Text {
+            height: 18px;
+            text: "Paired phones";
+            color: Palette.foreground;
+            font-size: 9px;
+            font-weight: 600;
+            opacity: 0.58;
+            vertical-alignment: bottom;
+        }
+        for device in root.devices: HorizontalLayout {
+            height: 34px;
+            spacing: 6px;
+            VerticalLayout {
+                vertical-stretch: 1;
+                Text { text: device.name; color: Palette.foreground; font-size: 9.5px; vertical-alignment: bottom; }
+                Text { text: device.detail; color: Palette.foreground; font-size: 8px; opacity: 0.52; vertical-alignment: top; }
+            }
+            MobileActionButton {
+                width: 58px;
+                horizontal-stretch: 0;
+                label: "Revoke";
+                clicked => { root.revoke-device(device.id); }
+            }
+        }
+    }
+}
+
 export component MainWindow inherits Window {
     title: "Agents Usage";
     width: 360px;
@@ -1125,6 +1295,14 @@ export component MainWindow inherits Window {
     in property <string> accounts-summary: "";
     in property <string> empty-text: "Looking for accounts…";
     in property <int> enabled-account-count: 0;
+    in-out property <bool> mobile-enabled: false;
+    in-out property <bool> mobile-allow-lan: false;
+    in-out property <string> mobile-status: "Disabled";
+    in-out property <string> mobile-lan-url: "";
+    in-out property <string> mobile-tailscale-url: "";
+    in-out property <string> mobile-pairing-link: "";
+    in property <[MobileDeviceView]> mobile-devices;
+    in property <[QrCell]> mobile-qr-cells;
 
     callback refresh-requested();
     callback settings-requested();
@@ -1147,6 +1325,12 @@ export component MainWindow inherits Window {
     callback account-color-changed(string, string);
     callback account-custom-color-changed(string, color);
     callback account-move-requested(string, int);
+    callback mobile-enabled-changed(bool);
+    callback mobile-allow-lan-changed(bool);
+    callback mobile-create-pairing();
+    callback mobile-copy-pairing();
+    callback mobile-configure-tailscale();
+    callback mobile-revoke-device(string);
 
     private property <[ColorChoice]> account-colors: [
         { name: "red", value: #ef4444 },
@@ -1340,6 +1524,22 @@ export component MainWindow inherits Window {
                             custom-color: root.usage-bar-custom-color;
                             mode-changed(value) => { root.usage-bar-color-mode-changed(value); }
                             custom-color-changed(value) => { root.usage-bar-custom-color-changed(value); }
+                        }
+                        MobileCompanionSettings {
+                            enabled: root.mobile-enabled;
+                            allow-lan: root.mobile-allow-lan;
+                            status: root.mobile-status;
+                            lan-url: root.mobile-lan-url;
+                            tailscale-url: root.mobile-tailscale-url;
+                            pairing-link: root.mobile-pairing-link;
+                            devices: root.mobile-devices;
+                            qr-cells: root.mobile-qr-cells;
+                            enabled-changed(value) => { root.mobile-enabled-changed(value); }
+                            allow-lan-changed(value) => { root.mobile-allow-lan-changed(value); }
+                            create-pairing => { root.mobile-create-pairing(); }
+                            copy-pairing => { root.mobile-copy-pairing(); }
+                            configure-tailscale => { root.mobile-configure-tailscale(); }
+                            revoke-device(id) => { root.mobile-revoke-device(id); }
                         }
                         Text {
                             height: 22px;
