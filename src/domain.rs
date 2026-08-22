@@ -3,6 +3,8 @@ use std::path::PathBuf;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RateWindow {
+    #[serde(default)]
+    pub label: Option<String>,
     pub used_percent: f32,
     pub duration_mins: Option<u64>,
     pub resets_at: Option<i64>,
@@ -45,9 +47,13 @@ pub struct AccountRecord {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CachedUsage {
+    #[serde(default = "default_provider_id")]
+    pub provider_id: String,
     pub home: PathBuf,
     pub snapshot: UsageSnapshot,
 }
+
+fn default_provider_id() -> String { "openai".into() }
 
 impl AccountRecord {
     pub fn email(&self) -> &str {

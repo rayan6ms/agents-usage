@@ -6,6 +6,7 @@ mod config;
 mod discovery;
 mod domain;
 mod mobile;
+mod providers;
 mod ui_model;
 
 use crate::config::{AppConfig, AccountPreference, UsageBarColorMode};
@@ -910,7 +911,7 @@ fn render_ui(
         ui.set_mobile_pairing_link("".into());
         ui.set_mobile_qr_cells(ModelRc::default());
     }
-    ui.set_accounts_summary(format!("{} discovered · refresh also checks for new Codex homes", records.len()).into());
+    ui.set_accounts_summary(format!("{} discovered · refresh also checks for new provider accounts", records.len()).into());
     if let Some(text) = empty_text { ui.set_empty_text(text.into()); }
     ui.set_desired_height_px(height);
     if let Some(anchor) = last_anchor.lock().ok().and_then(|value| *value) {
@@ -956,12 +957,19 @@ fn normalized_account_color(value: Option<&str>, fallback: &str) -> String {
     }
 }
 
-fn source_account_name(path: &Path) -> String {
+fn source_account_name(provider_id: &str, path: &Path) -> String {
+    if provider_id != providers::OPENAI {
+        return providers::display_name(provider_id).into();
+    }
     path.file_name()
         .and_then(|value| value.to_str())
         .filter(|value| !value.is_empty())
-        .unwrap_or("OpenAI")
+        .unwrap_or("OpenAI Codex")
         .to_string()
+}
+
+fn account_id(provider_id: &str, home: &Path) -> String {
+    format!("{provider_id}:{}", canonical_id(home))
 }
 
 fn default_account_name(record: &AccountRecord) -> String {
@@ -972,7 +980,7 @@ fn default_account_name(record: &AccountRecord) -> String {
         .and_then(|email| email.split('@').next())
         .filter(|value| !value.is_empty())
         .map(str::to_string)
-        .unwrap_or_else(|| source_account_name(&record.home))
+        .unwrap_or_else(|| source_account_name(&record.provider_id, &record.home))
 }
 
 fn normalized_display_name(value: &str) -> Option<String> {
@@ -993,6 +1001,7 @@ fn normalized_account_email(value: Option<&str>) -> Option<String> {
 
 fn reconcile_preference_for_snapshot(
     config: &mut AppConfig,
+    provider_id: &str,
     home: &Path,
     email: Option<&str>,
 ) {
@@ -1000,7 +1009,7 @@ fn reconcile_preference_for_snapshot(
     let path_index = config
         .accounts
         .iter()
-        .position(|pref| canonical_id(&pref.home) == canonical_id(home));
+        .position(|pref| pref.provider_id == provider_id && canonical_id(&pref.home) == canonical_id(home));
     let identity_indices = identity
         .as_deref()
         .map(|identity| {
@@ -1009,7 +1018,8 @@ fn reconcile_preference_for_snapshot(
                 .iter()
                 .enumerate()
                 .filter_map(|(index, pref)| {
-                    (normalized_account_email(pref.identity_email.as_deref()).as_deref() == Some(identity))
+                    (pref.provider_id == provider_id
+                        && normalized_account_email(pref.identity_email.as_deref()).as_deref() == Some(identity))
                         .then_some(index)
                 })
                 .collect::<Vec<_>>()
@@ -1019,6 +1029,7 @@ fn reconcile_preference_for_snapshot(
     let chosen_index = identity_indices.first().copied().or(path_index);
     let Some(chosen_index) = chosen_index else {
         config.accounts.push(AccountPreference {
+            provider_id: provider_id.into(),
             home: home.to_path_buf(),
             identity_email: identity,
             ..AccountPreference::default()
@@ -1027,6 +1038,7 @@ fn reconcile_preference_for_snapshot(
     };
 
     let mut chosen = config.accounts[chosen_index].clone();
+    chosen.provider_id = provider_id.into();
     chosen.home = home.to_path_buf();
     chosen.identity_email = identity;
     let mut remove = identity_indices.into_iter().collect::<HashSet<_>>();
@@ -1057,7 +1069,7 @@ fn reconcile_cached_accounts(
     for pref in &mut config.accounts {
         let cached_email = cache
             .iter()
-            .find(|cached| canonical_id(&cached.home) == canonical_id(&pref.home))
+            .find(|cached| cached.provider_id == pref.provider_id && canonical_id(&cached.home) == canonical_id(&pref.home))
             .and_then(|cached| normalized_account_email(cached.snapshot.email.as_deref()));
         pref.identity_email = cached_email
             .or_else(|| normalized_account_email(pref.identity_email.as_deref()));
@@ -1066,17 +1078,18 @@ fn reconcile_cached_accounts(
     let identities = config
         .accounts
         .iter()
-        .filter_map(|pref| normalized_account_email(pref.identity_email.as_deref()))
+        .filter_map(|pref| normalized_account_email(pref.identity_email.as_deref()).map(|email| (pref.provider_id.clone(), email)))
         .collect::<Vec<_>>();
     let mut reconciled = HashSet::new();
-    for identity in identities {
-        if !reconciled.insert(identity.clone()) { continue; }
+    for (provider_id, identity) in identities {
+        if !reconciled.insert((provider_id.clone(), identity.clone())) { continue; }
         let matching = config
             .accounts
             .iter()
             .enumerate()
             .filter_map(|(index, pref)| {
-                (normalized_account_email(pref.identity_email.as_deref()).as_deref() == Some(identity.as_str()))
+                (pref.provider_id == provider_id
+                    && normalized_account_email(pref.identity_email.as_deref()).as_deref() == Some(identity.as_str()))
                     .then_some(index)
             })
             .collect::<Vec<_>>();
@@ -1087,7 +1100,7 @@ fn reconcile_cached_accounts(
         let current_home = matching
             .iter()
             .rev()
-            .find_map(|index| discovery::is_marked_codex_home(&config.accounts[*index].home).then(|| config.accounts[*index].home.clone()))
+            .find_map(|index| providers::is_marked(&provider_id, &config.accounts[*index].home).then(|| config.accounts[*index].home.clone()))
             .unwrap_or_else(|| config.accounts[*matching.last().expect("duplicate group is non-empty")].home.clone());
         let chosen_index = matching[0];
         let mut chosen = config.accounts[chosen_index].clone();
@@ -1117,15 +1130,17 @@ fn reconcile_cached_accounts(
             cache
                 .iter()
                 .rev()
-                .find(|cached| canonical_id(&cached.home) == canonical_id(&pref.home))
+                .find(|cached| cached.provider_id == pref.provider_id && canonical_id(&cached.home) == canonical_id(&pref.home))
                 .or_else(|| {
                     let identity = normalized_account_email(pref.identity_email.as_deref())?;
                     cache.iter().rev().find(|cached| {
-                        normalized_account_email(cached.snapshot.email.as_deref()).as_deref()
+                        cached.provider_id == pref.provider_id
+                            && normalized_account_email(cached.snapshot.email.as_deref()).as_deref()
                             == Some(identity.as_str())
                     })
                 })
                 .map(|cached| CachedUsage {
+                    provider_id: pref.provider_id.clone(),
                     home: pref.home.clone(),
                     snapshot: cached.snapshot.clone(),
                 })
@@ -1134,7 +1149,8 @@ fn reconcile_cached_accounts(
     let changed = *config != original_config
         || reconciled_cache.len() != cache.len()
         || reconciled_cache.iter().zip(&cache).any(|(left, right)| {
-            canonical_id(&left.home) != canonical_id(&right.home)
+            left.provider_id != right.provider_id
+                || canonical_id(&left.home) != canonical_id(&right.home)
                 || normalized_account_email(left.snapshot.email.as_deref())
                     != normalized_account_email(right.snapshot.email.as_deref())
         });
@@ -1161,8 +1177,14 @@ fn move_account(
     let Some(target) = move_target(index, records.len(), direction) else { return false; };
     let home = records[index].home.clone();
     let target_home = records[target].home.clone();
-    let pref_index = config.accounts.iter().position(|pref| canonical_id(&pref.home) == canonical_id(&home));
-    let target_pref_index = config.accounts.iter().position(|pref| canonical_id(&pref.home) == canonical_id(&target_home));
+    let provider_id = records[index].provider_id.clone();
+    let target_provider_id = records[target].provider_id.clone();
+    let pref_index = config.accounts.iter().position(|pref| {
+        pref.provider_id == provider_id && canonical_id(&pref.home) == canonical_id(&home)
+    });
+    let target_pref_index = config.accounts.iter().position(|pref| {
+        pref.provider_id == target_provider_id && canonical_id(&pref.home) == canonical_id(&target_home)
+    });
     let (Some(pref_index), Some(target_pref_index)) = (pref_index, target_pref_index) else { return false; };
     records.swap(index, target);
     config.accounts.swap(pref_index, target_pref_index);
@@ -1170,21 +1192,23 @@ fn move_account(
 }
 
 fn record_from_snapshot(
+    provider_id: &str,
     home: PathBuf,
     snapshot: crate::domain::UsageSnapshot,
+    notice: Option<String>,
     config: &mut AppConfig,
     color_index: usize,
 ) -> AccountRecord {
-    let id = canonical_id(&home);
-    reconcile_preference_for_snapshot(config, &home, snapshot.email.as_deref());
+    let id = account_id(provider_id, &home);
+    reconcile_preference_for_snapshot(config, provider_id, &home, snapshot.email.as_deref());
     let discovered_name = snapshot
         .email
         .as_deref()
         .and_then(|email| email.split('@').next())
         .filter(|value| !value.is_empty())
         .map(str::to_string)
-        .unwrap_or_else(|| source_account_name(&home));
-    let pref = config::preference_for_mut(config, &home);
+        .unwrap_or_else(|| source_account_name(provider_id, &home));
+    let pref = config::preference_for_provider_mut(config, provider_id, &home);
     let fallback_color = ui_model::ACCOUNT_COLORS[color_index % ui_model::ACCOUNT_COLORS.len()];
     let color_name = normalized_account_color(pref.color.as_deref(), fallback_color);
     if pref.color.as_deref() != Some(color_name.as_str()) { pref.color = Some(color_name.clone()); }
@@ -1192,7 +1216,7 @@ fn record_from_snapshot(
     AccountRecord {
         id,
         home,
-        provider_id: "openai".into(),
+        provider_id: provider_id.into(),
         display_name: pref.display_name.clone().unwrap_or(discovered_name),
         color_name,
         enabled: pref.enabled,
@@ -1202,7 +1226,7 @@ fn record_from_snapshot(
         email_revealed: false,
         confirm_credit_id: String::new(),
         snapshot: Some(snapshot),
-        last_error: None,
+        last_error: notice,
     }
 }
 
@@ -1211,12 +1235,12 @@ fn placeholder_record(
     index: usize,
     cached_snapshot: Option<UsageSnapshot>,
 ) -> Option<AccountRecord> {
-    if !discovery::is_marked_codex_home(&pref.home) { return None; }
+    if !providers::is_marked(&pref.provider_id, &pref.home) { return None; }
     Some(AccountRecord {
-        id: canonical_id(&pref.home),
+        id: account_id(&pref.provider_id, &pref.home),
         home: pref.home.clone(),
-        provider_id: "openai".into(),
-        display_name: pref.display_name.clone().unwrap_or_else(|| source_account_name(&pref.home)),
+        provider_id: pref.provider_id.clone(),
+        display_name: pref.display_name.clone().unwrap_or_else(|| source_account_name(&pref.provider_id, &pref.home)),
         color_name: normalized_account_color(
             pref.color.as_deref(),
             ui_model::ACCOUNT_COLORS[index % ui_model::ACCOUNT_COLORS.len()],
@@ -1240,6 +1264,7 @@ fn persist_usage_cache(accounts: &Arc<Mutex<Vec<AccountRecord>>>) {
                 .iter()
                 .filter_map(|record| {
                     record.snapshot.clone().map(|snapshot| CachedUsage {
+                        provider_id: record.provider_id.clone(),
                         home: record.home.clone(),
                         snapshot,
                     })
@@ -1253,12 +1278,14 @@ fn persist_usage_cache(accounts: &Arc<Mutex<Vec<AccountRecord>>>) {
 }
 
 fn apply_snapshot(
+    provider_id: String,
     home: PathBuf,
     snapshot: crate::domain::UsageSnapshot,
+    notice: Option<String>,
     accounts: &Arc<Mutex<Vec<AccountRecord>>>,
     config: &Arc<Mutex<AppConfig>>,
 ) {
-    let id = canonical_id(&home);
+    let id = account_id(&provider_id, &home);
     let identity = normalized_account_email(snapshot.email.as_deref());
     let color_index = color_index_for_home(&home);
     let mut new_record = {
@@ -1267,7 +1294,7 @@ fn apply_snapshot(
             Err(_) => return,
         };
         let previous = cfg.clone();
-        let record = record_from_snapshot(home, snapshot, &mut cfg, color_index);
+        let record = record_from_snapshot(&provider_id, home, snapshot, notice, &mut cfg, color_index);
         if *cfg != previous {
             if let Err(error) = config::save(&cfg) {
                 eprintln!("settings: could not persist account discovery: {error}");
@@ -1278,12 +1305,12 @@ fn apply_snapshot(
 
     if let Ok(mut records) = accounts.lock() {
         let existing_index = records.iter().position(|record| {
-            record.id == id
+            record.provider_id == provider_id && (record.id == id
                 || identity.as_deref().is_some_and(|identity| {
                     normalized_account_email(record.snapshot.as_ref().and_then(|snapshot| snapshot.email.as_deref()))
                         .as_deref()
                         == Some(identity)
-                })
+                }))
         });
         if let Some(index) = existing_index {
             let existing = records.remove(index);
@@ -1293,12 +1320,12 @@ fn apply_snapshot(
             new_record.confirm_credit_id = existing.confirm_credit_id;
         }
         records.retain(|record| {
-            record.id != id
+            record.provider_id != provider_id || (record.id != id
                 && !identity.as_deref().is_some_and(|identity| {
                     normalized_account_email(record.snapshot.as_ref().and_then(|snapshot| snapshot.email.as_deref()))
                         .as_deref()
                         == Some(identity)
-                })
+                }))
         });
         records.push(new_record);
         let order = config
@@ -1307,7 +1334,7 @@ fn apply_snapshot(
                 cfg.accounts
                     .iter()
                     .enumerate()
-                    .map(|(index, pref)| (canonical_id(&pref.home), index))
+                    .map(|(index, pref)| (account_id(&pref.provider_id, &pref.home), index))
                     .collect::<HashMap<_, _>>()
             })
             .unwrap_or_default();
@@ -1329,7 +1356,7 @@ fn apply_refresh_error(
 }
 
 async fn refresh_known_accounts(
-    codex_path: PathBuf,
+    codex_path: Option<PathBuf>,
     accounts: Arc<Mutex<Vec<AccountRecord>>>,
     config: Arc<Mutex<AppConfig>>,
     ui: slint::Weak<MainWindow>,
@@ -1349,7 +1376,14 @@ async fn refresh_known_accounts(
                         record.snapshot.as_ref().and_then(|snapshot| snapshot.email.as_deref()),
                     )
                     .unwrap_or_else(|| record.id.clone());
-                    seen.insert(identity).then(|| (record.id.clone(), record.home.clone()))
+                    let dedupe_key = (record.provider_id.clone(), identity);
+                    seen.insert(dedupe_key).then(|| (
+                        record.id.clone(),
+                        providers::ProviderCandidate {
+                            provider_id: record.provider_id.clone(),
+                            home: record.home.clone(),
+                        },
+                    ))
                 })
                 .collect::<Vec<_>>()
         })
@@ -1361,27 +1395,27 @@ async fn refresh_known_accounts(
 
     let mut jobs = JoinSet::new();
     let operation_semaphore = Arc::new(Semaphore::new(operation_concurrency.max(1)));
-    for (id, home) in targets {
+    for (id, candidate) in targets {
         let codex_path = codex_path.clone();
         let rpc_semaphore = rpc_semaphore.clone();
         let operation_semaphore = operation_semaphore.clone();
         jobs.spawn(async move {
             let Ok(_operation_permit) = operation_semaphore.acquire_owned().await else { return None; };
             let Ok(_permit) = rpc_semaphore.acquire_owned().await else { return None; };
-            let result = codex::read_openai_account(&codex_path, &home).await;
-            Some((id, home, result))
+            let result = providers::read_account(&candidate, codex_path.as_deref()).await;
+            Some((id, candidate, result))
         });
     }
 
     while let Some(result) = jobs.join_next().await {
         match result {
-            Ok(Some((_id, home, Ok(snapshot)))) => {
-                apply_snapshot(home, snapshot, &accounts, &config);
+            Ok(Some((_id, candidate, Ok(reading)))) => {
+                apply_snapshot(candidate.provider_id, candidate.home, reading.snapshot, reading.notice, &accounts, &config);
                 schedule_render(ui.clone(), accounts.clone(), config.clone(), last_anchor.clone(), None);
             }
-            Ok(Some((id, _home, Err(error)))) => {
+            Ok(Some((id, _candidate, Err(error)))) => {
                 eprintln!("refresh: {id}: {error}");
-                let user_message = error.user_message().to_string();
+                let user_message = error.user_message();
                 apply_refresh_error(&id, user_message, &accounts);
                 schedule_render(ui.clone(), accounts.clone(), config.clone(), last_anchor.clone(), None);
             }
@@ -1392,7 +1426,7 @@ async fn refresh_known_accounts(
 }
 
 async fn discover_new_accounts(
-    codex_path: PathBuf,
+    codex_path: Option<PathBuf>,
     accounts: Arc<Mutex<Vec<AccountRecord>>>,
     config: Arc<Mutex<AppConfig>>,
     ui: slint::Weak<MainWindow>,
@@ -1401,43 +1435,52 @@ async fn discover_new_accounts(
     operation_concurrency: usize,
 ) {
     let cfg = config.lock().map(|cfg| cfg.clone()).unwrap_or_default();
-    let candidates = discovery::candidate_codex_homes(&cfg);
+    let candidates = providers::candidates(&cfg);
     let known = accounts
         .lock()
-        .map(|records| records.iter().map(|record| record.id.clone()).collect::<HashSet<_>>())
+        .map(|records| {
+            records
+                .iter()
+                .map(|record| (record.provider_id.clone(), canonical_id(&record.home)))
+                .collect::<HashSet<_>>()
+        })
         .unwrap_or_default();
     let unknown = candidates
         .into_iter()
-        .filter(|home| !known.contains(&canonical_id(home)))
+        .filter(|candidate| !known.contains(&(candidate.provider_id.clone(), canonical_id(&candidate.home))))
         .collect::<Vec<_>>();
 
     if unknown.is_empty() {
         return;
     }
 
-    eprintln!("discovery: probing {} new Codex-home candidate(s)", unknown.len());
+    eprintln!("discovery: probing {} new provider account candidate(s)", unknown.len());
     let cached_by_identity = config::load_usage_cache()
         .into_iter()
         .filter_map(|cached| {
             normalized_account_email(cached.snapshot.email.as_deref())
-                .map(|identity| (identity, cached.snapshot))
+                .map(|identity| ((cached.provider_id, identity), cached.snapshot))
         })
         .collect::<HashMap<_, _>>();
     let mut jobs = JoinSet::new();
     let operation_semaphore = Arc::new(Semaphore::new(operation_concurrency.max(1)));
-    for (order, home) in unknown.into_iter().enumerate() {
+    for (order, candidate) in unknown.into_iter().enumerate() {
         let codex_path = codex_path.clone();
         let rpc_semaphore = rpc_semaphore.clone();
         let operation_semaphore = operation_semaphore.clone();
         jobs.spawn(async move {
             let Ok(_operation_permit) = operation_semaphore.acquire_owned().await else { return None; };
             let Ok(_permit) = rpc_semaphore.acquire_owned().await else { return None; };
-            let result = codex::read_openai_account(&codex_path, &home).await;
+            let result = providers::read_account(&candidate, codex_path.as_deref()).await;
             let identity_email = match &result {
-                Ok(snapshot) => snapshot.email.clone(),
-                Err(_) => codex::read_openai_identity(&codex_path, &home).await.ok().flatten(),
+                Ok(reading) => reading.snapshot.email.clone(),
+                Err(_) if candidate.provider_id == providers::OPENAI => match codex_path.as_deref() {
+                    Some(codex_path) => codex::read_openai_identity(codex_path, &candidate.home).await.ok().flatten(),
+                    None => None,
+                },
+                Err(_) => None,
             };
-            Some((order, home, result, identity_email))
+            Some((order, candidate, result, identity_email))
         });
     }
 
@@ -1450,11 +1493,11 @@ async fn discover_new_accounts(
         }
     }
     completed.sort_by_key(|(order, _, _, _)| *order);
-    for (_, home, result, identity_email) in completed {
+    for (_, candidate, result, identity_email) in completed {
         match result {
-            Ok(snapshot) => {
-                eprintln!("discovery: found OpenAI account at {}", home.display());
-                apply_snapshot(home, snapshot, &accounts, &config);
+            Ok(reading) => {
+                eprintln!("discovery: found {} account at {}", providers::display_name(&candidate.provider_id), candidate.home.display());
+                apply_snapshot(candidate.provider_id, candidate.home, reading.snapshot, reading.notice, &accounts, &config);
                 schedule_render(ui.clone(), accounts.clone(), config.clone(), last_anchor.clone(), None);
             }
             Err(error) => {
@@ -1462,7 +1505,7 @@ async fn discover_new_accounts(
                 let cached_snapshot = identity_email
                     .as_deref()
                     .and_then(|email| normalized_account_email(Some(email)))
-                    .and_then(|identity| cached_by_identity.get(&identity).cloned());
+                    .and_then(|identity| cached_by_identity.get(&(candidate.provider_id.clone(), identity)).cloned());
                 if let Some(email) = identity_email {
                     let snapshot = cached_snapshot.unwrap_or_else(|| UsageSnapshot {
                         email: Some(email.clone()),
@@ -1473,17 +1516,31 @@ async fn discover_new_accounts(
                     });
                     eprintln!(
                         "discovery: matched moved account {email} at {}; updating its path despite the usage error",
-                        home.display()
+                        candidate.home.display()
                     );
-                    let id = canonical_id(&home);
-                    apply_snapshot(home, snapshot, &accounts, &config);
+                    let id = account_id(&candidate.provider_id, &candidate.home);
+                    apply_snapshot(candidate.provider_id, candidate.home, snapshot, None, &accounts, &config);
                     apply_refresh_error(&id, user_message, &accounts);
                     schedule_render(ui.clone(), accounts.clone(), config.clone(), last_anchor.clone(), None);
                     continue;
                 }
-                // A shallow candidate may be an incomplete/old Codex directory. It is
-                // intentionally not persisted as an account unless Codex validates it.
-                eprintln!("discovery: ignoring {}: {error}", home.display());
+                if candidate.provider_id == providers::OPENAI {
+                    // A shallow candidate may be an incomplete/old Codex directory. It is
+                    // intentionally not persisted as an account unless Codex validates it.
+                    eprintln!("discovery: ignoring {}: {error}", candidate.home.display());
+                    continue;
+                }
+                let snapshot = UsageSnapshot {
+                    email: None,
+                    bucket_name: Some(providers::display_name(&candidate.provider_id).into()),
+                    windows: Vec::new(),
+                    reset_available_count: 0,
+                    reset_credits: Vec::new(),
+                };
+                let id = account_id(&candidate.provider_id, &candidate.home);
+                apply_snapshot(candidate.provider_id, candidate.home, snapshot, None, &accounts, &config);
+                apply_refresh_error(&id, user_message, &accounts);
+                schedule_render(ui.clone(), accounts.clone(), config.clone(), last_anchor.clone(), None);
             }
         }
     }
@@ -1553,7 +1610,7 @@ async fn perform_reset(
             eprintln!("reset: outcome={outcome} account={account_id}");
             match codex::read_openai_account(&codex_path, &home).await {
                 Ok(snapshot) => {
-                    apply_snapshot(home, snapshot, &accounts, &config);
+                    apply_snapshot(providers::OPENAI.into(), home, snapshot, None, &accounts, &config);
                     if let Ok(mut records) = accounts.lock() {
                         if let Some(record) = records.iter_mut().find(|record| record.id == account_id) {
                             record.confirm_credit_id.clear();
@@ -1602,7 +1659,14 @@ async fn reconcile_pending_reset(
         Ok(outcome) if matches!(outcome.as_str(), "reset" | "alreadyRedeemed" | "nothingToReset" | "noCredit") => {
             match codex::read_openai_account(&codex_path, &pending.codex_home).await {
                 Ok(snapshot) => {
-                    apply_snapshot(pending.codex_home, snapshot, &accounts, &config);
+                    apply_snapshot(
+                        providers::OPENAI.into(),
+                        pending.codex_home,
+                        snapshot,
+                        None,
+                        &accounts,
+                        &config,
+                    );
                     let _ = config::clear_pending_reset();
                     schedule_render(ui, accounts, config, last_anchor, None);
                 }
@@ -1651,10 +1715,6 @@ fn spawn_worker(
                     }
                     Err(error) => {
                         eprintln!("Codex unavailable: {error}");
-                        schedule_render(
-                            ui.clone(), accounts.clone(), config.clone(), last_anchor_shared.clone(),
-                            Some("Codex was not found. Install Codex or set AGENTS_USAGE_CODEX_BIN to its executable.".into()),
-                        );
                         None
                     }
                 };
@@ -1857,7 +1917,6 @@ fn spawn_worker(
                                     continue;
                                 }
                             }
-                            let Some(codex_path) = codex_path.clone() else { continue; };
                             if refreshing.swap(true, Ordering::SeqCst) {
                                 if force { refresh_pending.store(true, Ordering::SeqCst); }
                                 continue;
@@ -1873,19 +1932,14 @@ fn spawn_worker(
                             let rpc_semaphore2 = rpc_semaphore.clone();
                             let tx2 = tx.clone();
                             let last_data_refresh2 = last_data_refresh.clone();
+                            let codex_path2 = codex_path.clone();
                             tokio::spawn(async move {
                                 // A pending reset is reconciled only as part of an explicit
                                 // open/refresh action. Background launches stay read-only.
-                                if let Ok(Some(pending)) = config::load_pending_reset() {
-                                    reconcile_pending_reset(
-                                        codex_path.clone(),
-                                        pending,
-                                        accounts2.clone(),
-                                        config2.clone(),
-                                        ui2.clone(),
-                                        anchor2.clone(),
-                                    )
-                                    .await;
+                                if let (Some(codex_path), Ok(Some(pending))) =
+                                    (codex_path2.clone(), config::load_pending_reset())
+                                {
+                                    reconcile_pending_reset(codex_path, pending, accounts2.clone(), config2.clone(), ui2.clone(), anchor2.clone()).await;
                                 }
                                 let had_known_accounts = accounts2
                                     .lock()
@@ -1894,7 +1948,7 @@ fn spawn_worker(
 
                                 // Fast lane: refresh already-known enabled accounts first.
                                 refresh_known_accounts(
-                                    codex_path.clone(), accounts2.clone(), config2.clone(), ui2.clone(), anchor2.clone(),
+                                    codex_path2.clone(), accounts2.clone(), config2.clone(), ui2.clone(), anchor2.clone(),
                                     rpc_semaphore2.clone(),
                                     INTERACTIVE_REFRESH_CONCURRENCY,
                                 ).await;
@@ -1909,7 +1963,7 @@ fn spawn_worker(
 
                                 if !discovering2.swap(true, Ordering::SeqCst) {
                                     discover_new_accounts(
-                                        codex_path, accounts2, config2, ui2.clone(), anchor2,
+                                        codex_path2, accounts2, config2, ui2.clone(), anchor2,
                                         rpc_semaphore2,
                                         INTERACTIVE_DISCOVERY_CONCURRENCY,
                                     ).await;
@@ -2125,7 +2179,7 @@ fn main() -> Result<(), slint::PlatformError> {
     }
     let cached_usage = loaded_cache
         .into_iter()
-        .map(|cached| (canonical_id(&cached.home), cached.snapshot))
+        .map(|cached| ((cached.provider_id, canonical_id(&cached.home)), cached.snapshot))
         .collect::<HashMap<_, _>>();
     let initial_records = loaded_config
         .accounts
@@ -2135,7 +2189,7 @@ fn main() -> Result<(), slint::PlatformError> {
             placeholder_record(
                 pref,
                 index,
-                cached_usage.get(&canonical_id(&pref.home)).cloned(),
+                cached_usage.get(&(pref.provider_id.clone(), canonical_id(&pref.home))).cloned(),
             )
         })
         .collect::<Vec<_>>();
@@ -2171,7 +2225,7 @@ fn main() -> Result<(), slint::PlatformError> {
         }
     };
 
-    render_ui(&ui, &accounts, &config, &last_anchor_shared, Some("Looking for Codex accounts…"));
+    render_ui(&ui, &accounts, &config, &last_anchor_shared, Some("Looking for agent accounts…"));
 
     {
         let tx = tx.clone();
@@ -2346,12 +2400,12 @@ fn main() -> Result<(), slint::PlatformError> {
             let home = if let Ok(mut records) = accounts.lock() {
                 records.iter_mut().find(|record| record.id == id.as_str()).map(|record| {
                     record.color_name = color.clone();
-                    record.home.clone()
+                    (record.provider_id.clone(), record.home.clone())
                 })
             } else { None };
-            if let Some(home) = home {
+            if let Some((provider_id, home)) = home {
                 if let Ok(mut cfg) = config_arc.lock() {
-                    config::preference_for_mut(&mut cfg, &home).color = Some(color);
+                    config::preference_for_provider_mut(&mut cfg, &provider_id, &home).color = Some(color);
                 }
                 if let Some(ui) = ui_weak.upgrade() {
                     render_ui(&ui, &accounts, &config_arc, &last_anchor, None);
@@ -2371,14 +2425,14 @@ fn main() -> Result<(), slint::PlatformError> {
                 if let Some(record) = records.iter_mut().find(|record| record.id == id.as_str()) {
                     record.expanded = !record.expanded;
                     if !record.expanded { record.confirm_credit_id.clear(); }
-                    Some((record.home.clone(), record.expanded))
+                    Some((record.provider_id.clone(), record.home.clone(), record.expanded))
                 } else {
                     None
                 }
             } else { None };
-            if let Some((home, expanded)) = changed {
+            if let Some((provider_id, home, expanded)) = changed {
                 if let Ok(mut cfg) = config.lock() {
-                    config::preference_for_mut(&mut cfg, &home).expanded = expanded;
+                    config::preference_for_provider_mut(&mut cfg, &provider_id, &home).expanded = expanded;
                 }
                 send(&tx, WorkerCommand::PersistSettings);
             }
@@ -2539,11 +2593,11 @@ fn main() -> Result<(), slint::PlatformError> {
             let home = if let Ok(mut records) = accounts.lock() {
                 records.iter_mut().find(|record| record.id == id.as_str()).map(|record| {
                     record.enabled = value;
-                    record.home.clone()
+                    (record.provider_id.clone(), record.home.clone())
                 })
             } else { None };
-            if let Some(home) = home {
-                if let Ok(mut cfg) = config_arc.lock() { config::preference_for_mut(&mut cfg, &home).enabled = value; }
+            if let Some((provider_id, home)) = home {
+                if let Ok(mut cfg) = config_arc.lock() { config::preference_for_provider_mut(&mut cfg, &provider_id, &home).enabled = value; }
             }
             if let Some(ui) = ui_weak.upgrade() { render_ui(&ui, &accounts, &config_arc, &last_anchor, None); }
             send(&tx, WorkerCommand::PersistSettings);
@@ -2560,11 +2614,11 @@ fn main() -> Result<(), slint::PlatformError> {
             let home = if let Ok(mut records) = accounts.lock() {
                 records.iter_mut().find(|record| record.id == id.as_str()).map(|record| {
                     record.pin_short = value;
-                    record.home.clone()
+                    (record.provider_id.clone(), record.home.clone())
                 })
             } else { None };
-            if let Some(home) = home {
-                if let Ok(mut cfg) = config_arc.lock() { config::preference_for_mut(&mut cfg, &home).pin_short = value; }
+            if let Some((provider_id, home)) = home {
+                if let Ok(mut cfg) = config_arc.lock() { config::preference_for_provider_mut(&mut cfg, &provider_id, &home).pin_short = value; }
             }
             if let Some(ui) = ui_weak.upgrade() { render_ui(&ui, &accounts, &config_arc, &last_anchor, None); }
             send(&tx, WorkerCommand::PersistSettings);
@@ -2579,12 +2633,12 @@ fn main() -> Result<(), slint::PlatformError> {
             let home = if let Ok(mut records) = accounts.lock() {
                 records.iter_mut().find(|record| record.id == id.as_str()).map(|record| {
                     record.display_name = requested_name.clone().unwrap_or_else(|| default_account_name(record));
-                    record.home.clone()
+                    (record.provider_id.clone(), record.home.clone())
                 })
             } else { None };
-            if let Some(home) = home {
+            if let Some((provider_id, home)) = home {
                 if let Ok(mut cfg) = config_arc.lock() {
-                    config::preference_for_mut(&mut cfg, &home).display_name = requested_name;
+                    config::preference_for_provider_mut(&mut cfg, &provider_id, &home).display_name = requested_name;
                 }
                 send(&tx, WorkerCommand::PersistSettings);
             }
@@ -2602,12 +2656,12 @@ fn main() -> Result<(), slint::PlatformError> {
             let home = if let Ok(mut records) = accounts.lock() {
                 records.iter_mut().find(|record| record.id == id.as_str()).map(|record| {
                     record.color_name = color.to_string();
-                    record.home.clone()
+                    (record.provider_id.clone(), record.home.clone())
                 })
             } else { None };
-            if let Some(home) = home {
+            if let Some((provider_id, home)) = home {
                 if let Ok(mut cfg) = config_arc.lock() {
-                    config::preference_for_mut(&mut cfg, &home).color = Some(color.to_string());
+                    config::preference_for_provider_mut(&mut cfg, &provider_id, &home).color = Some(color.to_string());
                 }
                 if let Some(ui) = ui_weak.upgrade() {
                     render_ui(&ui, &accounts, &config_arc, &last_anchor, None);
@@ -2843,8 +2897,8 @@ mod tests {
         let (cache, changed) = reconcile_cached_accounts(
             &mut config,
             vec![
-                CachedUsage { home: old_home, snapshot: snapshot.clone() },
-                CachedUsage { home: current_home.clone(), snapshot },
+                CachedUsage { provider_id: "openai".into(), home: old_home, snapshot: snapshot.clone() },
+                CachedUsage { provider_id: "openai".into(), home: current_home.clone(), snapshot },
             ],
         );
 

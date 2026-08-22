@@ -12,6 +12,12 @@
     <binary>agents-usage</binary>
   </provides>
   <releases>
+    <release version="0.4.0" date="2026-08-22">
+      <description>
+        <p>Adds OpenCode Go, Claude, Gemini, Cursor, and Grok discovery with provider-native quota capabilities on desktop and phone.</p>
+      </description>
+    </release>
+    <release version="0.3.1" date="2026-08-22"/>
     <release version="0.3.0" date="2026-08-21">
       <description>
         <p>Adds a read-only phone companion, private LAN and Tailscale pairing, and a signed Android application.</p>

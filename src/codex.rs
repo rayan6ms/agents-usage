@@ -421,6 +421,7 @@ fn normalize_windows(result: &Value) -> (Option<String>, Vec<RateWindow>) {
         let Some(value) = bucket.get(field).and_then(Value::as_object) else { continue; };
         let Some(used) = value.get("usedPercent").and_then(Value::as_f64) else { continue; };
         windows.push(RateWindow {
+            label: None,
             used_percent: (used as f32).clamp(0.0, 100.0),
             duration_mins: value.get("windowDurationMins").and_then(Value::as_u64),
             resets_at: value.get("resetsAt").and_then(Value::as_i64),

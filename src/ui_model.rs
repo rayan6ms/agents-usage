@@ -1,5 +1,5 @@
 use crate::domain::{AccountRecord, RateWindow};
-use crate::{AccountView, ResetCreditView};
+use crate::{AccountView, LimitView, ResetCreditView};
 use chrono::{Datelike, Local, TimeZone};
 use slint::{Color, ModelRc, VecModel};
 use std::rc::Rc;
@@ -15,6 +15,10 @@ pub fn account_view(record: &AccountRecord, enabled_count: usize) -> AccountView
         .map(|snapshot| snapshot.windows.iter().collect())
         .unwrap_or_default();
     windows.sort_by_key(|window| window.duration_mins.unwrap_or(u64::MAX));
+    if let Some(index) = primary_window_index(&windows) {
+        let primary = windows.remove(index);
+        windows.push(primary);
+    }
 
     let short = if windows.len() >= 2 { windows.first().copied() } else { None };
     let long = windows.last().copied();
@@ -26,6 +30,14 @@ pub fn account_view(record: &AccountRecord, enabled_count: usize) -> AccountView
     let show_accent = enabled_count > 1;
 
     let pin_short = record.pin_short && short.is_some();
+    let detail_windows = windows
+        .iter()
+        .copied()
+        .filter(|window| {
+            !(long.is_some_and(|main| std::ptr::eq(*window, main))
+                || pin_short && short.is_some_and(|pinned| std::ptr::eq(*window, pinned)))
+        })
+        .collect::<Vec<_>>();
     let reset_count = snapshot.map(|value| value.reset_available_count).unwrap_or(0);
     let mut credits = Vec::new();
     if let Some(snapshot) = snapshot {
@@ -53,27 +65,27 @@ pub fn account_view(record: &AccountRecord, enabled_count: usize) -> AccountView
 
     let has_long_reset = long.and_then(|window| window.resets_at).is_some();
     let has_short_reset = short.and_then(|window| window.resets_at).is_some();
-    let has_hidden_details = (!pin_short && short.is_some())
+    let has_hidden_details = !detail_windows.is_empty()
         || has_long_reset
         || has_short_reset
         || reset_count > 0;
 
     let detail_height = if record.expanded {
-        detail_target_height(!pin_short && short.is_some(), reset_count > 0, credits.len())
+        detail_target_height(detail_windows.len(), reset_count > 0, credits.len())
     } else {
         0.0
     };
-    let target_detail_height = detail_target_height(!pin_short && short.is_some(), reset_count > 0, credits.len());
+    let target_detail_height = detail_target_height(detail_windows.len(), reset_count > 0, credits.len());
     let row_height = 53.0
         + if pin_short { 20.0 } else { 0.0 }
         + if record.last_error.is_some() && long.is_some() { 18.0 } else { 0.0 }
         + detail_height;
 
     let long_label = long
-        .map(|window| window_label(window.duration_mins, snapshot.and_then(|s| s.bucket_name.as_deref()), true))
+        .map(|window| window_label(window, snapshot.and_then(|s| s.bucket_name.as_deref()), true))
         .unwrap_or_else(|| "Usage".into());
     let short_label = short
-        .map(|window| window_label(window.duration_mins, snapshot.and_then(|s| s.bucket_name.as_deref()), false))
+        .map(|window| window_label(window, snapshot.and_then(|s| s.bucket_name.as_deref()), false))
         .unwrap_or_else(|| "5-hour".into());
 
     AccountView {
@@ -118,6 +130,19 @@ pub fn account_view(record: &AccountRecord, enabled_count: usize) -> AccountView
             .unwrap_or_default()
             .into(),
         short_reset_color: short.map(|window| reset_timer_color(window, now)).unwrap_or_default(),
+        detail_limits: Rc::new(VecModel::from(
+            detail_windows
+                .into_iter()
+                .map(|window| LimitView {
+                    label: window_label(window, snapshot.and_then(|s| s.bucket_name.as_deref()), false).into(),
+                    remaining: remaining_fraction(window),
+                    percent_text: percent_text(window).into(),
+                    has_reset_time: window.resets_at.is_some(),
+                    reset_text: window.resets_at.map(|value| format_countdown(value, now)).unwrap_or_default().into(),
+                    reset_color: reset_timer_color(window, now),
+                })
+                .collect::<Vec<_>>(),
+        )).into(),
         has_reset_credits: reset_count > 0,
         reset_count_text: if reset_count == 1 { "1 available".into() } else { format!("{reset_count} available").into() },
         reset_credits: Rc::new(VecModel::from(credits)).into(),
@@ -149,8 +174,8 @@ pub fn model(records: &[AccountRecord]) -> (ModelRc<AccountView>, usize) {
     (Rc::new(VecModel::from(rows)).into(), enabled_count)
 }
 
-fn detail_target_height(has_hidden_short: bool, has_reset_count: bool, reset_rows: usize) -> f32 {
-    (if has_hidden_short { 20.0 } else { 0.0 })
+fn detail_target_height(limit_rows: usize, has_reset_count: bool, reset_rows: usize) -> f32 {
+    limit_rows as f32 * 20.0
         + (if has_reset_count { 18.0 } else { 0.0 })
         + (if reset_rows > 0 { 3.0 } else { 0.0 })
         + reset_rows as f32 * 30.0
@@ -161,12 +186,46 @@ fn remaining_fraction(window: &RateWindow) -> f32 {
     ((100.0 - window.used_percent).clamp(0.0, 100.0)) / 100.0
 }
 
+fn primary_window_index(windows: &[&RateWindow]) -> Option<usize> {
+    let canonical = windows
+        .iter()
+        .enumerate()
+        .filter_map(|(index, window)| {
+            let label = window.label.as_deref().unwrap_or_default();
+            let priority = match label {
+                "Monthly" => 4,
+                "Weekly" => 3,
+                _ => return None,
+            };
+            Some((index, priority, window.duration_mins.unwrap_or_default()))
+        })
+        .max_by_key(|(_, priority, duration)| (*priority, *duration))
+        .map(|(index, _, _)| index);
+    canonical.or_else(|| {
+        windows
+            .iter()
+            .enumerate()
+            .filter(|(_, window)| window.duration_mins.is_some())
+            .max_by_key(|(_, window)| window.duration_mins)
+            .map(|(index, _)| index)
+    }).or_else(|| {
+        windows
+            .iter()
+            .enumerate()
+            .max_by(|(_, left), (_, right)| left.used_percent.total_cmp(&right.used_percent))
+            .map(|(index, _)| index)
+    })
+}
+
 fn percent_text(window: &RateWindow) -> String {
     format!("{:.0}%", remaining_fraction(window) * 100.0)
 }
 
-fn window_label(duration_mins: Option<u64>, fallback: Option<&str>, long: bool) -> String {
-    match duration_mins {
+fn window_label(window: &RateWindow, fallback: Option<&str>, long: bool) -> String {
+    if let Some(label) = window.label.as_deref().filter(|label| !label.trim().is_empty()) {
+        return label.to_string();
+    }
+    match window.duration_mins {
         Some(10_080) => "Weekly".into(),
         Some(300) => "5-hour".into(),
         Some(minutes) if minutes % 1_440 == 0 => {
@@ -199,11 +258,8 @@ fn format_countdown(timestamp: i64, now: i64) -> String {
 
 fn reset_timer_color(window: &RateWindow, now: i64) -> Color {
     let remaining = window.resets_at.unwrap_or(now).saturating_sub(now).max(0) as f32;
-    let (minimum, maximum) = if window.duration_mins.unwrap_or(10_080) <= 300 {
-        (30.0 * 60.0, 5.0 * 60.0 * 60.0)
-    } else {
-        (12.0 * 60.0 * 60.0, 7.0 * 24.0 * 60.0 * 60.0)
-    };
+    let maximum = window.duration_mins.unwrap_or(10_080) as f32 * 60.0;
+    let minimum = maximum / 10.0;
     let red_weight = ((remaining - minimum) / (maximum - minimum)).clamp(0.0, 1.0);
     let hue = 120.0 * (1.0 - red_weight);
     Color::from_hsva(hue, 0.78, 0.95, 1.0)
@@ -275,7 +331,7 @@ pub const ACCOUNT_COLORS: [&str; 10] = [
 
 #[cfg(test)]
 mod tests {
-    use super::{ACCOUNT_COLORS, color_from_name, format_countdown, is_account_color, mask_account_name, reset_timer_color};
+    use super::{ACCOUNT_COLORS, color_from_name, format_countdown, is_account_color, mask_account_name, primary_window_index, reset_timer_color};
     use crate::domain::RateWindow;
 
     #[test]
@@ -301,12 +357,14 @@ mod tests {
     #[test]
     fn reset_timer_moves_from_red_toward_green() {
         let weekly_far = RateWindow {
+            label: Some("Weekly".into()),
             used_percent: 0.0,
             duration_mins: Some(10_080),
             resets_at: Some(7 * 24 * 60 * 60),
         };
         let weekly_near = RateWindow { resets_at: Some(12 * 60 * 60), ..weekly_far.clone() };
         let short_far = RateWindow {
+            label: Some("5-hour".into()),
             used_percent: 0.0,
             duration_mins: Some(300),
             resets_at: Some(5 * 60 * 60),
@@ -330,5 +388,22 @@ mod tests {
         assert_eq!(format_countdown(5 * 60 * 60 - 1, 0), "5h 00m");
         assert_eq!(format_countdown(1, 0), "1m");
         assert_eq!(format_countdown(0, 0), "0m");
+    }
+
+    #[test]
+    fn model_buckets_surface_the_most_constrained_quota() {
+        let comfortable = RateWindow {
+            label: Some("Gemini Flash".into()),
+            used_percent: 20.0,
+            duration_mins: None,
+            resets_at: None,
+        };
+        let constrained = RateWindow {
+            label: Some("Gemini Pro".into()),
+            used_percent: 85.0,
+            duration_mins: None,
+            resets_at: None,
+        };
+        assert_eq!(primary_window_index(&[&comfortable, &constrained]), Some(1));
     }
 }

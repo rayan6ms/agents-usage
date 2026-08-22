@@ -6,11 +6,14 @@ import re
 root = Path(__file__).resolve().parents[1]
 required = [
     'Cargo.toml', '.cargo/config.toml', 'build.rs', 'README.md', 'LICENSE', 'CHANGELOG.md',
-    'src/main.rs', 'src/codex.rs', 'src/config.rs', 'src/discovery.rs',
+    'src/main.rs', 'src/codex.rs', 'src/config.rs', 'src/discovery.rs', 'src/providers.rs',
     'src/domain.rs', 'src/mobile.rs', 'src/ui_model.rs', 'ui/app.slint',
     'mobile/index.html', 'mobile/app.css', 'mobile/app.js',
     'mobile/manifest.webmanifest', 'mobile/sw.js',
     'mobile/icon-192.png', 'mobile/icon-512.png',
+    'assets/providers/openai.svg', 'assets/providers/opencode.svg',
+    'assets/providers/anthropic.svg', 'assets/providers/gemini.svg',
+    'assets/providers/cursor.svg', 'assets/providers/xai.svg', 'docs/providers.md',
     'integration/gnome-shell/extension/extension.js',
     'integration/gnome-shell/extension/metadata.json',
     'packaging/linux/agents-usage.desktop.in',
@@ -50,6 +53,7 @@ ui = (root / 'ui/app.slint').read_text()
 ext = (root / 'integration/gnome-shell/extension/extension.js').read_text()
 mobile_js = (root / 'mobile/app.js').read_text()
 mobile_css = (root / 'mobile/app.css').read_text()
+providers = (root / 'src/providers.rs').read_text()
 android_build = (root / 'mobile-android/app/build.gradle').read_text()
 android_main = (root / 'mobile-android/app/src/main/java/io/github/agentsusagetray/companion/MainActivity.java').read_text()
 release_workflow = (root / '.github/workflows/release.yml').read_text()
@@ -77,6 +81,16 @@ assert 'account-name-changed' in ui and 'account-color-changed' in ui
 assert 'account-custom-color-changed' in ui and 'HsvColorPicker' in ui
 assert 'blur-names-changed' in ui and 'color-reset-timers-changed' in ui
 assert 'root.provider-id == "openai": Path' in ui
+assert 'assets/providers/cursor.svg' in ui
+for provider in ['openai', 'opencode', 'anthropic', 'google', 'cursor', 'xai']:
+    assert f'"{provider}"' in providers
+    assert f'"{provider}" => PROVIDER_' in (root / 'src/mobile.rs').read_text()
+assert 'zen/go/v1/usage' in providers
+assert '/api/oauth/usage' in providers
+assert 'retrieveUserQuota' in providers
+assert 'Cursor does not expose individual plan usage' in providers
+assert 'weekly usage pool only in Settings' in providers
+assert 'gemini-credentials.json' in providers and 'secret_service::SecretService' in providers
 assert 'UsageBarColorSettings' in ui and 'usage-bar-color-mode-changed' in ui
 assert 'Green → red' in ui and 'usage-bar-custom-color-changed' in ui
 assert 'account-move-requested' in ui
