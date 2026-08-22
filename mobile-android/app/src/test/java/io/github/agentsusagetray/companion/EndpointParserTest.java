@@ -7,6 +7,7 @@ import static org.junit.Assert.assertTrue;
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import org.junit.Test;
 
 public class EndpointParserTest {
@@ -32,6 +33,31 @@ public class EndpointParserTest {
         String webUrl = "https://desktop.example.ts.net/agents-usage/pair?token=" + TOKEN;
         String appUrl = "agents-usage://pair?url=" + URLEncoder.encode(webUrl, StandardCharsets.UTF_8);
         assertEquals(webUrl, EndpointParser.parse(appUrl).pairingUrl);
+    }
+
+    @Test
+    public void parsesLanAndTailscaleFromOneAppLink() {
+        String lan = "http://192.168.1.20:3765/pair?token=" + TOKEN + "&path=/";
+        String tail = "https://desktop.example.ts.net/agents-usage/pair?token=" + TOKEN
+                + "&path=/agents-usage/";
+        String appLink = "agents-usage://pair?url=" + URLEncoder.encode(lan, StandardCharsets.UTF_8)
+                + "&fallback=" + URLEncoder.encode(tail, StandardCharsets.UTF_8);
+        List<EndpointParser.ParsedEndpoint> endpoints = EndpointParser.parseAll(appLink);
+        assertEquals(2, endpoints.size());
+        assertEquals("http://192.168.1.20:3765/", endpoints.get(0).baseUrl);
+        assertEquals("https://desktop.example.ts.net/agents-usage/", endpoints.get(1).baseUrl);
+    }
+
+    @Test
+    public void parsesCompactDesktopBundle() {
+        String appLink = "agents-usage://pair?token=" + TOKEN
+                + "&base=" + URLEncoder.encode("http://192.168.1.20:3765/", StandardCharsets.UTF_8)
+                + "&fallback=" + URLEncoder.encode(
+                        "https://desktop.example.ts.net/agents-usage/", StandardCharsets.UTF_8);
+        List<EndpointParser.ParsedEndpoint> endpoints = EndpointParser.parseAll(appLink);
+        assertEquals(2, endpoints.size());
+        assertEquals("http://192.168.1.20:3765/", endpoints.get(0).baseUrl);
+        assertEquals("https://desktop.example.ts.net/agents-usage/", endpoints.get(1).baseUrl);
     }
 
     @Test

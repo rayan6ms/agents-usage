@@ -10,9 +10,13 @@ import android.content.SharedPreferences;
 import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.net.Uri;
+import android.net.ConnectivityManager;
+import android.net.Network;
 import android.net.http.SslError;
 import android.os.Bundle;
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
 import android.window.OnBackInvokedDispatcher;
 import android.view.Gravity;
 import android.view.View;
@@ -39,10 +43,15 @@ import org.json.JSONException;
 
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.net.HttpURLConnection;
+import java.net.URLEncoder;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public final class MainActivity extends Activity {
     private static final String PREFS = "connections";
@@ -54,9 +63,15 @@ public final class MainActivity extends Activity {
     private static final int TEXT = Color.rgb(244, 247, 248);
     private static final int MUTED = Color.rgb(174, 181, 184);
     private static final int DANGER = Color.rgb(239, 100, 100);
+    private static final int HEALTH_TIMEOUT_MS = 3000;
+    private static final long HEALTH_INTERVAL_MS = 15000;
 
     private final List<String> endpointBases = new ArrayList<>();
+    private final List<EndpointParser.ParsedEndpoint> pairingQueue = new ArrayList<>();
     private final Set<String> attemptedBases = new LinkedHashSet<>();
+    private final ExecutorService connectionExecutor = Executors.newSingleThreadExecutor();
+    private final AtomicInteger connectionGeneration = new AtomicInteger();
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private SharedPreferences preferences;
     private FrameLayout root;
     private WebView webView;
@@ -65,7 +80,38 @@ public final class MainActivity extends Activity {
     private TextView noticeView;
     private LinearLayout endpointList;
     private EndpointParser.ParsedEndpoint pendingPairing;
+    private String pairingPreferredBase;
     private boolean mainFrameFailed;
+    private boolean periodicHealthEnabled;
+    private boolean healthCheckInProgress;
+    private String currentBase;
+    private ConnectivityManager connectivityManager;
+    private boolean networkCallbackRegistered;
+    private final ConnectivityManager.NetworkCallback networkCallback = new ConnectivityManager.NetworkCallback() {
+        @Override
+        public void onAvailable(Network network) {
+            mainHandler.post(() -> {
+                if (currentBase == null && !endpointBases.isEmpty() && pendingPairing == null) {
+                    connectToPreferredEndpoint();
+                } else {
+                    verifyCurrentEndpoint();
+                }
+            });
+        }
+
+        @Override
+        public void onLost(Network network) {
+            mainHandler.post(MainActivity.this::verifyCurrentEndpoint);
+        }
+    };
+    private final Runnable periodicHealthCheck = new Runnable() {
+        @Override
+        public void run() {
+            if (!periodicHealthEnabled) return;
+            verifyCurrentEndpoint();
+            mainHandler.postDelayed(this, HEALTH_INTERVAL_MS);
+        }
+    };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -73,6 +119,7 @@ public final class MainActivity extends Activity {
         getWindow().setStatusBarColor(BACKGROUND);
         getWindow().setNavigationBarColor(BACKGROUND);
         preferences = getSharedPreferences(PREFS, MODE_PRIVATE);
+        connectivityManager = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
         loadEndpoints();
         buildInterface();
         configureWebView();
@@ -105,12 +152,52 @@ public final class MainActivity extends Activity {
 
     @Override
     protected void onPause() {
+        periodicHealthEnabled = false;
+        mainHandler.removeCallbacks(periodicHealthCheck);
         CookieManager.getInstance().flush();
         super.onPause();
     }
 
     @Override
+    protected void onStart() {
+        super.onStart();
+        if (connectivityManager != null && !networkCallbackRegistered) {
+            try {
+                connectivityManager.registerDefaultNetworkCallback(networkCallback);
+                networkCallbackRegistered = true;
+            } catch (RuntimeException ignored) {
+                networkCallbackRegistered = false;
+            }
+        }
+    }
+
+    @Override
+    protected void onStop() {
+        if (connectivityManager != null && networkCallbackRegistered) {
+            try {
+                connectivityManager.unregisterNetworkCallback(networkCallback);
+            } catch (RuntimeException ignored) {
+                // The OS may already have removed the callback while stopping.
+            }
+            networkCallbackRegistered = false;
+        }
+        super.onStop();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        periodicHealthEnabled = true;
+        mainHandler.removeCallbacks(periodicHealthCheck);
+        mainHandler.postDelayed(periodicHealthCheck, HEALTH_INTERVAL_MS);
+    }
+
+    @Override
     protected void onDestroy() {
+        periodicHealthEnabled = false;
+        mainHandler.removeCallbacksAndMessages(null);
+        connectionGeneration.incrementAndGet();
+        connectionExecutor.shutdownNow();
         if (webView != null) {
             webView.stopLoading();
             webView.setWebViewClient(null);
@@ -160,8 +247,8 @@ public final class MainActivity extends Activity {
         content.addView(title);
 
         TextView explanation = text(
-                "On the desktop, enable mobile access and generate a private pairing link. Paste it here. "
-                        + "You can add both LAN and Tailscale links; the app will use whichever is reachable.",
+                "In desktop Settings, enable Phone companion and scan its QR code with your camera. "
+                        + "If you copied the private link instead, paste it here. LAN and Tailscale can be paired together.",
                 15, MUTED);
         explanation.setLineSpacing(dp(3), 1.0f);
         explanation.setPadding(0, dp(12), 0, dp(18));
@@ -211,12 +298,25 @@ public final class MainActivity extends Activity {
         content.addView(endpointList);
 
         TextView help = text(
-                "The token is exchanged for a protected desktop cookie and is never saved in this list. "
-                        + "Press Android Back while viewing usage to manage connections.",
+                "Pairing links expire after 10 minutes and are exchanged for protected desktop cookies. "
+                        + "Use the Connections icon or Android Back to return here.",
                 13, MUTED);
         help.setLineSpacing(dp(2), 1.0f);
         help.setPadding(0, dp(24), 0, 0);
         content.addView(help);
+
+        Button updates = button("Check for app updates", SURFACE);
+        LinearLayout.LayoutParams updateParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        updateParams.setMargins(0, dp(16), 0, 0);
+        content.addView(updates, updateParams);
+        updates.setOnClickListener(view -> startActivity(new Intent(
+                Intent.ACTION_VIEW, Uri.parse("https://github.com/rayan6ms/agents-usage/releases/latest"))));
+
+        TextView version = text("Companion " + BuildConfig.VERSION_NAME, 12, MUTED);
+        version.setGravity(Gravity.CENTER_HORIZONTAL);
+        version.setPadding(0, dp(9), 0, 0);
+        content.addView(version);
 
         setupView = new ScrollView(this);
         setupView.setFillViewport(true);
@@ -250,7 +350,10 @@ public final class MainActivity extends Activity {
 
     private void beginPairing(String link) {
         try {
-            pendingPairing = EndpointParser.parse(link);
+            pairingQueue.clear();
+            pairingQueue.addAll(EndpointParser.parseAll(link));
+            pendingPairing = pairingQueue.remove(0);
+            pairingPreferredBase = pendingPairing.baseUrl;
         } catch (IllegalArgumentException error) {
             showSetup(error.getMessage());
             return;
@@ -260,7 +363,7 @@ public final class MainActivity extends Activity {
         mainFrameFailed = false;
         setupView.setVisibility(View.GONE);
         webView.setVisibility(View.VISIBLE);
-        webView.loadUrl(pendingPairing.pairingUrl);
+        webView.loadUrl(pairingRequestUrl(pendingPairing.pairingUrl));
     }
 
     private void connectToPreferredEndpoint() {
@@ -269,13 +372,18 @@ public final class MainActivity extends Activity {
             return;
         }
         String preferred = preferences.getString(LAST_ENDPOINT_KEY, endpointBases.get(0));
-        attemptedBases.clear();
         pendingPairing = null;
         if (!endpointBases.contains(preferred)) preferred = endpointBases.get(0);
-        loadEndpoint(preferred);
+        List<String> candidates = new ArrayList<>();
+        candidates.add(preferred);
+        for (String base : endpointBases) {
+            if (!base.equals(preferred)) candidates.add(base);
+        }
+        probeAndLoad(candidates, "None of the saved desktops could be reached.");
     }
 
     private void loadEndpoint(String baseUrl) {
+        currentBase = baseUrl;
         attemptedBases.add(baseUrl);
         mainFrameFailed = false;
         setupView.setVisibility(View.GONE);
@@ -284,33 +392,117 @@ public final class MainActivity extends Activity {
     }
 
     private void tryNextEndpoint(String reason) {
+        List<String> candidates = new ArrayList<>();
         for (String base : endpointBases) {
             if (!attemptedBases.contains(base)) {
-                loadEndpoint(base);
-                return;
+                candidates.add(base);
             }
         }
-        showSetup(reason == null ? "None of the saved desktops could be reached." : reason);
+        if (candidates.isEmpty()) {
+            showSetup(reason == null ? "None of the saved desktops could be reached." : reason);
+        } else {
+            probeAndLoad(candidates, reason);
+        }
+    }
+
+    private void probeAndLoad(List<String> candidates, String failureMessage) {
+        int generation = connectionGeneration.incrementAndGet();
+        healthCheckInProgress = true;
+        connectionExecutor.execute(() -> {
+            String selected = null;
+            boolean unauthorized = false;
+            for (String base : candidates) {
+                int status = healthStatus(base);
+                if (status == HttpURLConnection.HTTP_NO_CONTENT) {
+                    selected = base;
+                    break;
+                }
+                if (status == HttpURLConnection.HTTP_UNAUTHORIZED) unauthorized = true;
+            }
+            String healthyBase = selected;
+            boolean pairingRequired = unauthorized;
+            mainHandler.post(() -> {
+                if (generation != connectionGeneration.get() || isFinishing() || isDestroyed()) return;
+                healthCheckInProgress = false;
+                if (healthyBase != null) {
+                    attemptedBases.clear();
+                    loadEndpoint(healthyBase);
+                } else {
+                    String message = pairingRequired
+                            ? "A saved desktop rejected this phone. Generate a new pairing link."
+                            : failureMessage;
+                    showSetup(message == null ? "None of the saved desktops could be reached." : message);
+                }
+            });
+        });
+    }
+
+    private int healthStatus(String base) {
+        String cookie = CookieManager.getInstance().getCookie(base);
+        return EndpointHealthProbe.check(base, cookie, HEALTH_TIMEOUT_MS);
+    }
+
+    private void verifyCurrentEndpoint() {
+        if (healthCheckInProgress || currentBase == null || pendingPairing != null
+                || setupView.getVisibility() == View.VISIBLE) return;
+        String checkedBase = currentBase;
+        healthCheckInProgress = true;
+        connectionExecutor.execute(() -> {
+            int status = healthStatus(checkedBase);
+            mainHandler.post(() -> {
+                healthCheckInProgress = false;
+                if (isFinishing() || isDestroyed() || !checkedBase.equals(currentBase)) return;
+                if (status != HttpURLConnection.HTTP_NO_CONTENT) {
+                    List<String> candidates = new ArrayList<>();
+                    for (String base : endpointBases) {
+                        if (!base.equals(checkedBase)) candidates.add(base);
+                    }
+                    candidates.add(checkedBase);
+                    probeAndLoad(candidates, "None of the saved desktops could be reached.");
+                }
+            });
+        });
     }
 
     private void pairingSucceeded() {
         String baseUrl = pendingPairing.baseUrl;
-        if (!endpointBases.contains(baseUrl)) endpointBases.add(0, baseUrl);
-        preferences.edit().putString(LAST_ENDPOINT_KEY, baseUrl).apply();
+        if (!endpointBases.contains(baseUrl)) endpointBases.add(baseUrl);
         saveEndpoints();
-        pendingPairing = null;
-        pairingInput.setText("");
         CookieManager.getInstance().flush();
         webView.clearHistory();
-        Toast.makeText(this, "Desktop paired", Toast.LENGTH_SHORT).show();
+        if (!pairingQueue.isEmpty()) {
+            pendingPairing = pairingQueue.remove(0);
+            mainFrameFailed = false;
+            webView.loadUrl(pairingRequestUrl(pendingPairing.pairingUrl));
+            return;
+        }
+        pendingPairing = null;
+        pairingInput.setText("");
+        Toast.makeText(this, endpointBases.size() > 1 ? "LAN and Tailscale paired" : "Desktop paired", Toast.LENGTH_SHORT).show();
+        String preferred = pairingPreferredBase;
+        pairingPreferredBase = null;
+        if (preferred != null && endpointBases.contains(preferred)) {
+            preferences.edit().putString(LAST_ENDPOINT_KEY, preferred).apply();
+        }
+        if (endpointBases.size() > 1) {
+            connectToPreferredEndpoint();
+        } else {
+            currentBase = baseUrl;
+            attemptedBases.clear();
+        }
     }
 
     private void showSetup(String message) {
         pendingPairing = null;
+        pairingPreferredBase = null;
+        pairingQueue.clear();
         webView.stopLoading();
         webView.setVisibility(View.GONE);
         setupView.setVisibility(View.VISIBLE);
-        if (message == null || message.isBlank()) {
+        currentBase = null;
+        connectionGeneration.incrementAndGet();
+        healthCheckInProgress = false;
+        if (message == null || message.trim().isEmpty()) {
             noticeView.setVisibility(View.GONE);
         } else {
             noticeView.setText(message);
@@ -345,7 +537,9 @@ public final class MainActivity extends Activity {
             use.setOnClickListener(view -> {
                 attemptedBases.clear();
                 pendingPairing = null;
-                loadEndpoint(base);
+                List<String> candidate = new ArrayList<>();
+                candidate.add(base);
+                probeAndLoad(candidate, "That desktop could not be reached.");
             });
             row.addView(use);
             Button remove = button("Remove", SURFACE);
@@ -361,6 +555,9 @@ public final class MainActivity extends Activity {
     }
 
     private void removeEndpoint(String base) {
+        CookieManager.getInstance().setCookie(base, "agents_usage_mobile=; Path=" + cookiePath(base)
+                + "; Max-Age=0; HttpOnly; SameSite=Strict");
+        CookieManager.getInstance().flush();
         endpointBases.remove(base);
         if (base.equals(preferences.getString(LAST_ENDPOINT_KEY, null))) {
             preferences.edit().remove(LAST_ENDPOINT_KEY).apply();
@@ -443,6 +640,24 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private String pairingRequestUrl(String pairingUrl) {
+        try {
+            String name = (Build.MANUFACTURER + " " + Build.MODEL).trim();
+            return pairingUrl + "&device=" + URLEncoder.encode(name, "UTF-8");
+        } catch (Exception ignored) {
+            return pairingUrl;
+        }
+    }
+
+    private String cookiePath(String base) {
+        try {
+            String path = new URI(base).getPath();
+            return path == null || path.isEmpty() ? "/" : path;
+        } catch (URISyntaxException ignored) {
+            return "/";
+        }
+    }
+
     private TextView text(String value, int size, int color) {
         TextView view = new TextView(this);
         view.setText(value);
@@ -472,6 +687,10 @@ public final class MainActivity extends Activity {
         @Override
         public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
             String url = request.getUrl().toString();
+            if ("agents-usage://connections".equalsIgnoreCase(url)) {
+                showSetup(null);
+                return true;
+            }
             if (isAllowed(url)) return false;
             Toast.makeText(MainActivity.this, "Navigation outside the paired desktop was blocked", Toast.LENGTH_SHORT).show();
             return true;

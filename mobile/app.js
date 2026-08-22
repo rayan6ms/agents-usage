@@ -3,6 +3,7 @@
 const accountsNode = document.querySelector("#accounts");
 const noticeNode = document.querySelector("#notice");
 const refreshButton = document.querySelector("#refresh");
+const connectionsButton = document.querySelector("#connections");
 const statusNode = document.querySelector("#live-status");
 const updatedNode = document.querySelector("#updated");
 const expandedOverrides = new Map();
@@ -161,6 +162,14 @@ async function refreshUsage() {
   }
 }
 
+async function refreshUsageIfStale() {
+  try {
+    await fetch(endpoint("api/refresh-if-stale"), {method:"POST", cache:"no-store", credentials:"same-origin"});
+  } catch (_) {
+    // The normal state poll owns connection messaging and endpoint failover.
+  }
+}
+
 accountsNode.addEventListener("click", event => {
   const button = event.target.closest("button[data-action]");
   const accountNode = event.target.closest(".account");
@@ -175,10 +184,14 @@ accountsNode.addEventListener("click", event => {
 });
 
 refreshButton.addEventListener("click", refreshUsage);
+if (/AgentsUsageAndroid\//.test(navigator.userAgent)) {
+  connectionsButton.hidden = false;
+  connectionsButton.addEventListener("click", () => { window.location.href = "agents-usage://connections"; });
+}
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "hidden") { resumedAt = Date.now(); return; }
   loadState();
-  if (Date.now() - resumedAt > 30000) refreshUsage();
+  if (Date.now() - resumedAt > 30000) refreshUsageIfStale();
 });
 
 setInterval(() => {
@@ -186,5 +199,5 @@ setInterval(() => {
 }, 1000);
 setInterval(() => { if (document.visibilityState === "visible") loadState({quiet:true}); }, 10000);
 
-loadState().then(refreshUsage);
+loadState().then(refreshUsageIfStale);
 if ("serviceWorker" in navigator && window.isSecureContext) navigator.serviceWorker.register("./sw.js");

@@ -33,6 +33,10 @@ toml = "0.9"
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 thiserror = "2"
+sha2 = "0.10"
+qrcode = { version = "0.14", default-features = false }
+copypasta = { version = "0.10", default-features = false, features = ["x11"] }
+url = "2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 ksni = "0.3.6"
@@ -48,6 +52,10 @@ windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
 
 [build-dependencies]
 slint-build = "=1.17.1"
+
+[dev-dependencies]
+http-body-util = "0.1"
+tower = { version = "0.5", features = ["util"] }
 
 [profile.release]
 opt-level = "z"

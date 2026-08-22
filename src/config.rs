@@ -57,7 +57,13 @@ pub struct MobileConfig {
     #[serde(default = "default_mobile_port")]
     pub port: u16,
     #[serde(default)]
+    pub allow_lan: Option<bool>,
+    #[serde(default)]
     pub access_token: Option<String>,
+    #[serde(default)]
+    pub pairing: Option<MobilePairing>,
+    #[serde(default)]
+    pub devices: Vec<MobileDevice>,
 }
 
 impl Default for MobileConfig {
@@ -66,12 +72,47 @@ impl Default for MobileConfig {
             enabled: false,
             bind: default_mobile_bind(),
             port: default_mobile_port(),
+            allow_lan: None,
             access_token: None,
+            pairing: None,
+            devices: Vec::new(),
         }
     }
 }
 
-fn default_mobile_bind() -> String { "0.0.0.0".into() }
+impl MobileConfig {
+    pub fn allows_lan(&self) -> bool {
+        self.allow_lan
+            .unwrap_or(!matches!(self.bind.as_str(), "127.0.0.1" | "::1" | "localhost"))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MobilePairing {
+    pub token_hash: String,
+    pub expires_at: i64,
+    #[serde(default = "default_pairing_uses")]
+    pub remaining_uses: u8,
+    #[serde(default)]
+    pub device_id: Option<String>,
+}
+
+fn default_pairing_uses() -> u8 { 1 }
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MobileDevice {
+    pub id: String,
+    pub name: String,
+    pub token_hash: String,
+    #[serde(default)]
+    pub additional_token_hashes: Vec<String>,
+    pub created_at: i64,
+    pub expires_at: i64,
+    #[serde(default)]
+    pub last_seen_at: Option<i64>,
+}
+
+fn default_mobile_bind() -> String { "127.0.0.1".into() }
 fn default_mobile_port() -> u16 { 3765 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -345,7 +386,7 @@ fn preserve_invalid_file(path: &Path, label: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::{AccountPreference, AppConfig, atomic_write};
+    use super::{AccountPreference, AppConfig, MobileConfig, atomic_write};
     use crate::domain::{CachedUsage, UsageSnapshot};
     use std::fs;
 
@@ -394,6 +435,28 @@ pin_short = false
         assert!(!config.color_reset_timers);
         assert_eq!(config.usage_bar_color_mode, super::UsageBarColorMode::Account);
         assert_eq!(config.usage_bar_custom_color, "#27bfce");
+    }
+
+    #[test]
+    fn new_phone_companion_configs_do_not_expose_the_lan_by_default() {
+        let mobile = MobileConfig::default();
+        assert_eq!(mobile.bind, "127.0.0.1");
+        assert!(!mobile.allows_lan());
+    }
+
+    #[test]
+    fn existing_lan_bindings_keep_their_previous_behavior() {
+        let mobile: MobileConfig = toml::from_str(
+            r#"
+enabled = true
+bind = "0.0.0.0"
+port = 3765
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(mobile.allow_lan, None);
+        assert!(mobile.allows_lan());
     }
 
     #[test]

@@ -1,22 +1,29 @@
 use crate::WorkerCommand;
-use crate::config::{AppConfig, MobileConfig};
+use crate::config;
+use crate::config::{AppConfig, MobileConfig, MobileDevice, MobilePairing};
 use crate::domain::{AccountRecord, RateWindow};
 use axum::extract::{Query, State};
 use axum::http::header::{
     CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, COOKIE, HeaderName, LOCATION, SET_COOKIE,
-    X_CONTENT_TYPE_OPTIONS,
+    RETRY_AFTER, X_CONTENT_TYPE_OPTIONS,
 };
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::oneshot;
 
 const COOKIE_NAME: &str = "agents_usage_mobile";
+const PAIRING_TTL_SECONDS: i64 = 10 * 60;
+const SESSION_TTL_SECONDS: i64 = 180 * 24 * 60 * 60;
+const FORCE_REFRESH_COOLDOWN: Duration = Duration::from_secs(2);
 const REFERRER_POLICY: HeaderName = HeaderName::from_static("referrer-policy");
 const PERMISSIONS_POLICY: HeaderName = HeaderName::from_static("permissions-policy");
 const INDEX_HTML: &str = include_str!("../mobile/index.html");
@@ -30,16 +37,19 @@ const ICON_512: &[u8] = include_bytes!("../mobile/icon-512.png");
 
 #[derive(Clone)]
 struct MobileServerState {
-    access_token: String,
     accounts: Arc<Mutex<Vec<AccountRecord>>>,
     config: Arc<Mutex<AppConfig>>,
     refreshing: Arc<AtomicBool>,
     tx: UnboundedSender<WorkerCommand>,
+    persist_config: bool,
+    last_forced_refresh: Arc<Mutex<Option<Instant>>>,
 }
 
 #[derive(Deserialize)]
 struct PairQuery {
     token: Option<String>,
+    path: Option<String>,
+    device: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -85,18 +95,43 @@ pub async fn serve(
     config: Arc<Mutex<AppConfig>>,
     refreshing: Arc<AtomicBool>,
     tx: UnboundedSender<WorkerCommand>,
+    shutdown: oneshot::Receiver<()>,
+    ready: oneshot::Sender<Result<String, String>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let Some(access_token) = mobile_config.access_token.filter(|token| token.len() >= 32) else {
-        return Err("mobile access is enabled but its access token is missing or too short".into());
-    };
-
     let state = MobileServerState {
-        access_token,
         accounts,
         config,
         refreshing,
         tx,
+        persist_config: true,
+        last_forced_refresh: Arc::new(Mutex::new(None)),
     };
+    let app = router(state);
+    let address = match parse_bind_address(&mobile_config.bind, mobile_config.port) {
+        Ok(address) => address,
+        Err(error) => {
+            let _ = ready.send(Err(format!("Invalid listen address: {error}")));
+            return Err(error.into());
+        }
+    };
+    let listener = match TcpListener::bind(address).await {
+        Ok(listener) => listener,
+        Err(error) => {
+            let _ = ready.send(Err(format!("Could not listen on {address}: {error}")));
+            return Err(error.into());
+        }
+    };
+    let _ = ready.send(Ok(format!("Listening on {address}")));
+    eprintln!("mobile: companion view listening on http://{address}");
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async move {
+            let _ = shutdown.await;
+        })
+        .await?;
+    Ok(())
+}
+
+fn router(state: MobileServerState) -> Router {
     let routes = Router::new()
         .route("/", get(index))
         .route("/index.html", get(index))
@@ -108,19 +143,16 @@ pub async fn serve(
         .route("/icon-192.png", get(icon_192))
         .route("/icon-512.png", get(icon_512))
         .route("/pair", get(pair))
+        .route("/api/health", get(api_health))
         .route("/api/state", get(api_state))
         .route("/api/refresh", post(api_refresh))
+        .route("/api/refresh-if-stale", post(api_refresh_if_stale))
         .with_state(state);
     // The second mount also permits a direct reverse proxy that preserves its
     // path prefix. Tailscale Serve normally strips the prefix before proxying.
-    let app = Router::new()
+    Router::new()
         .merge(routes.clone())
-        .nest("/agents-usage", routes);
-    let address = format!("{}:{}", mobile_config.bind, mobile_config.port);
-    let listener = TcpListener::bind(&address).await?;
-    eprintln!("mobile: companion view listening on http://{address}");
-    axum::serve(listener, app).await?;
-    Ok(())
+        .nest("/agents-usage", routes)
 }
 
 async fn index() -> Response {
@@ -187,19 +219,79 @@ async fn pair(
     let Some(token) = query.token else {
         return unauthorized();
     };
-    if !constant_time_eq(token.as_bytes(), state.access_token.as_bytes()) {
+    let now = chrono::Utc::now().timestamp();
+    let supplied_hash = hash_token(&token);
+    let session_token = new_token();
+    let session_hash = hash_token(&session_token);
+    let device_name = normalized_device_name(query.device.as_deref());
+    let Ok(mut current_config) = state.config.lock() else {
+        return (StatusCode::INTERNAL_SERVER_ERROR, "Desktop configuration is unavailable.").into_response();
+    };
+    let mut next_config = current_config.clone();
+    let pairing_matches = |pairing: &MobilePairing| {
+        pairing.expires_at >= now
+            && pairing.remaining_uses > 0
+            && constant_time_eq(pairing.token_hash.as_bytes(), supplied_hash.as_bytes())
+    };
+    let mut pairing_valid = next_config.mobile.pairing.as_ref().is_some_and(pairing_matches);
+    if !pairing_valid {
+        let disk_config = config::load();
+        if disk_config.mobile.enabled
+            && disk_config.mobile.pairing.as_ref().is_some_and(pairing_matches)
+        {
+            next_config.mobile.pairing = disk_config.mobile.pairing;
+            pairing_valid = true;
+        }
+    }
+    if !pairing_valid {
         return unauthorized();
     }
+    let device_id = next_config
+        .mobile
+        .pairing
+        .as_ref()
+        .and_then(|pairing| pairing.device_id.clone())
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    if let Some(pairing) = next_config.mobile.pairing.as_mut() {
+        pairing.remaining_uses = pairing.remaining_uses.saturating_sub(1);
+        pairing.device_id = Some(device_id.clone());
+        if pairing.remaining_uses == 0 {
+            next_config.mobile.pairing = None;
+        }
+    }
+    next_config.mobile.devices.retain(|device| device.expires_at >= now);
+    if let Some(device) = next_config.mobile.devices.iter_mut().find(|device| device.id == device_id) {
+        device.additional_token_hashes.push(session_hash);
+        device.expires_at = now + SESSION_TTL_SECONDS;
+        device.last_seen_at = Some(now);
+    } else {
+        next_config.mobile.devices.push(MobileDevice {
+            id: device_id,
+            name: device_name,
+            token_hash: session_hash,
+            additional_token_hashes: Vec::new(),
+            created_at: now,
+            expires_at: now + SESSION_TTL_SECONDS,
+            last_seen_at: Some(now),
+        });
+    }
+    if state.persist_config && config::save(&next_config).is_err() {
+        return (StatusCode::INTERNAL_SERVER_ERROR, "Could not save the paired device.").into_response();
+    }
+    *current_config = next_config;
+    drop(current_config);
+    let _ = state.tx.send(WorkerCommand::MobileDeviceListChanged);
 
+    let cookie_path = normalized_cookie_path(query.path.as_deref());
     let secure = if forwarded_over_https(&headers) { "; Secure" } else { "" };
     let cookie = format!(
-        "{COOKIE_NAME}={}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000{secure}",
-        state.access_token
+        "{COOKIE_NAME}={session_token}; Path={cookie_path}; HttpOnly; SameSite=Strict; Max-Age={SESSION_TTL_SECONDS}{secure}"
     );
+    let Ok(cookie) = HeaderValue::from_str(&cookie) else {
+        return (StatusCode::BAD_REQUEST, "The requested cookie path is invalid.").into_response();
+    };
     let mut response = StatusCode::SEE_OTHER.into_response();
-    response
-        .headers_mut()
-        .insert(SET_COOKIE, HeaderValue::from_str(&cookie).unwrap());
+    response.headers_mut().insert(SET_COOKIE, cookie);
     // A relative redirect preserves a Tailscale Serve path prefix.
     response
         .headers_mut()
@@ -212,7 +304,7 @@ async fn pair(
 }
 
 async fn api_state(State(state): State<MobileServerState>, headers: HeaderMap) -> Response {
-    if !authorized(&headers, &state.access_token) {
+    if !authorized(&headers, &state.config) {
         return unauthorized();
     }
     let config = state
@@ -250,9 +342,35 @@ async fn api_state(State(state): State<MobileServerState>, headers: HeaderMap) -
     response
 }
 
-async fn api_refresh(State(state): State<MobileServerState>, headers: HeaderMap) -> Response {
-    if !authorized(&headers, &state.access_token) {
+async fn api_health(State(state): State<MobileServerState>, headers: HeaderMap) -> Response {
+    if !authorized(&headers, &state.config) {
         return unauthorized();
+    }
+    let mut response = StatusCode::NO_CONTENT.into_response();
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    insert_security_headers(response.headers_mut());
+    response
+}
+
+async fn api_refresh(State(state): State<MobileServerState>, headers: HeaderMap) -> Response {
+    if !authorized(&headers, &state.config) {
+        return unauthorized();
+    }
+    if let Ok(mut last_refresh) = state.last_forced_refresh.lock() {
+        if last_refresh.is_some_and(|when| when.elapsed() < FORCE_REFRESH_COOLDOWN) {
+            let mut response = (
+                StatusCode::TOO_MANY_REQUESTS,
+                "Wait briefly before refreshing again.",
+            )
+                .into_response();
+            response.headers_mut().insert(RETRY_AFTER, HeaderValue::from_static("2"));
+            response.headers_mut().insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+            insert_security_headers(response.headers_mut());
+            return response;
+        }
+        *last_refresh = Some(Instant::now());
     }
     if state.tx.send(WorkerCommand::Refresh).is_err() {
         return (
@@ -260,6 +378,21 @@ async fn api_refresh(State(state): State<MobileServerState>, headers: HeaderMap)
             "desktop worker unavailable",
         )
             .into_response();
+    }
+    let mut response = StatusCode::ACCEPTED.into_response();
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    insert_security_headers(response.headers_mut());
+    response
+}
+
+async fn api_refresh_if_stale(State(state): State<MobileServerState>, headers: HeaderMap) -> Response {
+    if !authorized(&headers, &state.config) {
+        return unauthorized();
+    }
+    if state.tx.send(WorkerCommand::RefreshIfStaleMobile).is_err() {
+        return (StatusCode::SERVICE_UNAVAILABLE, "desktop worker unavailable").into_response();
     }
     let mut response = StatusCode::ACCEPTED.into_response();
     response
@@ -323,19 +456,114 @@ fn mobile_account(key: usize, account: AccountRecord) -> MobileAccount {
     }
 }
 
-fn authorized(headers: &HeaderMap, expected: &str) -> bool {
-    headers
+fn authorized(headers: &HeaderMap, config: &Arc<Mutex<AppConfig>>) -> bool {
+    let Some(token) = headers
         .get_all(COOKIE)
         .iter()
         .filter_map(|value| value.to_str().ok())
-        .any(|cookies| {
-            cookies.split(';').any(|cookie| {
-                let Some((name, value)) = cookie.trim().split_once('=') else {
-                    return false;
-                };
-                name == COOKIE_NAME && constant_time_eq(value.as_bytes(), expected.as_bytes())
+        .find_map(|cookies| {
+            cookies.split(';').find_map(|cookie| {
+                let (name, value) = cookie.trim().split_once('=')?;
+                (name == COOKIE_NAME).then_some(value.to_string())
             })
         })
+    else {
+        return false;
+    };
+    let supplied_hash = hash_token(&token);
+    let now = chrono::Utc::now().timestamp();
+    let Ok(mut config) = config.lock() else { return false; };
+    if let Some(device) = config.mobile.devices.iter_mut().find(|device| {
+            device.expires_at >= now
+                && std::iter::once(&device.token_hash)
+                    .chain(device.additional_token_hashes.iter())
+                    .any(|expected| constant_time_eq(expected.as_bytes(), supplied_hash.as_bytes()))
+        }) {
+        if device.last_seen_at.is_none_or(|last_seen| now - last_seen >= 60) {
+            device.last_seen_at = Some(now);
+        }
+        true
+    } else {
+        false
+    }
+}
+
+pub fn create_pairing(config: &mut AppConfig, uses: u8) -> String {
+    let token = new_token();
+    config.mobile.pairing = Some(MobilePairing {
+        token_hash: hash_token(&token),
+        expires_at: chrono::Utc::now().timestamp() + PAIRING_TTL_SECONDS,
+        remaining_uses: uses.clamp(1, 4),
+        device_id: None,
+    });
+    token
+}
+
+pub fn migrate_legacy_access(config: &mut AppConfig) -> bool {
+    let Some(token) = config.mobile.access_token.take().filter(|value| value.len() >= 32) else {
+        config.mobile.access_token = None;
+        return false;
+    };
+    let now = chrono::Utc::now().timestamp();
+    config.mobile.devices.push(MobileDevice {
+        id: uuid::Uuid::new_v4().to_string(),
+        name: "Previously paired phone".into(),
+        token_hash: hash_token(&token),
+        additional_token_hashes: Vec::new(),
+        created_at: now,
+        expires_at: now + SESSION_TTL_SECONDS,
+        last_seen_at: None,
+    });
+    true
+}
+
+pub fn revoke_device(config: &mut AppConfig, id: &str) -> bool {
+    let previous = config.mobile.devices.len();
+    config.mobile.devices.retain(|device| device.id != id);
+    previous != config.mobile.devices.len()
+}
+
+pub fn revoke_all_devices(config: &mut AppConfig) {
+    config.mobile.devices.clear();
+    config.mobile.pairing = None;
+    config.mobile.access_token = None;
+}
+
+fn new_token() -> String {
+    format!("{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple())
+}
+
+fn hash_token(token: &str) -> String {
+    format!("{:x}", Sha256::digest(token.as_bytes()))
+}
+
+fn normalized_device_name(value: Option<&str>) -> String {
+    let value = value.unwrap_or("Android phone").trim();
+    let sanitized = value
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(64)
+        .collect::<String>();
+    if sanitized.is_empty() { "Android phone".into() } else { sanitized }
+}
+
+fn normalized_cookie_path(value: Option<&str>) -> String {
+    let Some(path) = value else { return "/".into(); };
+    if !path.starts_with('/')
+        || !path.ends_with('/')
+        || path.contains("..")
+        || path.bytes().any(|byte| !byte.is_ascii() || byte <= 0x20 || byte == 0x7f || byte == b';')
+    {
+        return "/".into();
+    }
+    path.into()
+}
+
+fn parse_bind_address(bind: &str, port: u16) -> Result<std::net::SocketAddr, std::net::AddrParseError> {
+    if let Ok(address) = bind.parse::<std::net::IpAddr>() {
+        return Ok(std::net::SocketAddr::new(address, port));
+    }
+    format!("{bind}:{port}").parse()
 }
 
 fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
@@ -392,8 +620,20 @@ fn static_response(
 
 #[cfg(test)]
 mod tests {
-    use super::{constant_time_eq, forwarded_over_https};
-    use axum::http::{HeaderMap, HeaderValue};
+    use super::{
+        MobileServerState, constant_time_eq, create_pairing, forwarded_over_https,
+        migrate_legacy_access, normalized_cookie_path, parse_bind_address, router,
+    };
+    use crate::WorkerCommand;
+    use crate::config::AppConfig;
+    use axum::body::Body;
+    use axum::http::header::{RETRY_AFTER, SET_COOKIE};
+    use axum::http::{HeaderMap, HeaderValue, Request, StatusCode};
+    use http_body_util::BodyExt;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::{Arc, Mutex};
+    use tokio::sync::mpsc::unbounded_channel;
+    use tower::ServiceExt;
 
     #[test]
     fn constant_time_comparison_rejects_different_tokens() {
@@ -408,5 +648,148 @@ mod tests {
         assert!(!forwarded_over_https(&headers));
         headers.insert("x-forwarded-proto", HeaderValue::from_static("https"));
         assert!(forwarded_over_https(&headers));
+    }
+
+    #[test]
+    fn ipv4_and_ipv6_bind_addresses_are_supported() {
+        assert_eq!(parse_bind_address("0.0.0.0", 3765).unwrap().to_string(), "0.0.0.0:3765");
+        assert_eq!(parse_bind_address("::", 3765).unwrap().to_string(), "[::]:3765");
+    }
+
+    #[test]
+    fn cookie_paths_reject_header_injection_and_traversal() {
+        assert_eq!(normalized_cookie_path(Some("/agents-usage/")), "/agents-usage/");
+        assert_eq!(normalized_cookie_path(Some("/bad\r\npath/")), "/");
+        assert_eq!(normalized_cookie_path(Some("/../private/")), "/");
+        assert_eq!(normalized_cookie_path(Some("relative/")), "/");
+    }
+
+    #[test]
+    fn legacy_master_token_becomes_an_individual_device_session() {
+        let mut config = AppConfig::default();
+        config.mobile.access_token = Some("a".repeat(64));
+        assert!(migrate_legacy_access(&mut config));
+        assert!(config.mobile.access_token.is_none());
+        assert_eq!(config.mobile.devices.len(), 1);
+        assert!(!config.mobile.devices[0].token_hash.contains(&"a".repeat(32)));
+    }
+
+    #[tokio::test]
+    async fn pairing_is_one_time_and_issues_a_prefix_scoped_device_session() {
+        let mut config = AppConfig::default();
+        config.mobile.enabled = true;
+        let pairing_token = create_pairing(&mut config, 1);
+        let config = Arc::new(Mutex::new(config));
+        let (tx, mut rx) = unbounded_channel::<WorkerCommand>();
+        let app = router(MobileServerState {
+            accounts: Arc::new(Mutex::new(Vec::new())),
+            config: config.clone(),
+            refreshing: Arc::new(AtomicBool::new(false)),
+            tx,
+            persist_config: false,
+            last_forced_refresh: Arc::new(Mutex::new(None)),
+        });
+
+        let unauthenticated = app
+            .clone()
+            .oneshot(Request::get("/api/health").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+
+        let uri = format!(
+            "/agents-usage/pair?token={pairing_token}&path=/agents-usage/&device=Pixel%20test"
+        );
+        let paired = app
+            .clone()
+            .oneshot(
+                Request::get(&uri)
+                    .header("x-forwarded-proto", "https")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(paired.status(), StatusCode::SEE_OTHER);
+        assert!(matches!(rx.recv().await, Some(WorkerCommand::MobileDeviceListChanged)));
+        let set_cookie = paired.headers().get(SET_COOKIE).unwrap().to_str().unwrap();
+        assert!(set_cookie.contains("Path=/agents-usage/"));
+        assert!(set_cookie.contains("HttpOnly"));
+        assert!(set_cookie.contains("SameSite=Strict"));
+        assert!(set_cookie.contains("Secure"));
+        let cookie = set_cookie.split(';').next().unwrap();
+
+        let healthy = app
+            .clone()
+            .oneshot(
+                Request::get("/agents-usage/api/health")
+                    .header("cookie", cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(healthy.status(), StatusCode::NO_CONTENT);
+        assert_eq!(config.lock().unwrap().mobile.devices[0].name, "Pixel test");
+
+        let state = app
+            .clone()
+            .oneshot(
+                Request::get("/agents-usage/api/state")
+                    .header("cookie", cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(state.status(), StatusCode::OK);
+        let state_body = String::from_utf8(state.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap();
+        assert!(!state_body.contains("token_hash"));
+        assert!(!state_body.contains("codex_executable"));
+        assert!(!state_body.contains("additional_codex_homes"));
+
+        let stale_refresh = app
+            .clone()
+            .oneshot(
+                Request::post("/agents-usage/api/refresh-if-stale")
+                    .header("cookie", cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(stale_refresh.status(), StatusCode::ACCEPTED);
+        assert!(matches!(rx.recv().await, Some(WorkerCommand::RefreshIfStaleMobile)));
+
+        let manual_refresh = app
+            .clone()
+            .oneshot(
+                Request::post("/agents-usage/api/refresh")
+                    .header("cookie", cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(manual_refresh.status(), StatusCode::ACCEPTED);
+        assert!(matches!(rx.recv().await, Some(WorkerCommand::Refresh)));
+        let rate_limited = app
+            .clone()
+            .oneshot(
+                Request::post("/agents-usage/api/refresh")
+                    .header("cookie", cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(rate_limited.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(rate_limited.headers().get(RETRY_AFTER).unwrap(), "2");
+
+        let reused = app
+            .oneshot(Request::get(&uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(reused.status(), StatusCode::UNAUTHORIZED);
     }
 }

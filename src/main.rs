@@ -10,7 +10,8 @@ mod ui_model;
 
 use crate::config::{AppConfig, AccountPreference, UsageBarColorMode};
 use crate::domain::{AccountRecord, CachedUsage, PendingReset, UsageSnapshot};
-use slint::{CloseRequestResponse, ComponentHandle};
+use copypasta::{ClipboardContext, ClipboardProvider};
+use slint::{CloseRequestResponse, ComponentHandle, ModelRc, VecModel};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -19,7 +20,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 use tokio::runtime::Builder;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
-use tokio::sync::Semaphore;
+use tokio::sync::{Semaphore, oneshot};
 use tokio::task::JoinSet;
 
 slint::include_modules!();
@@ -31,6 +32,7 @@ const DBUS_PATH: &str = "/io/github/agentsusagetray/App";
 const PANEL_GAP_PX: i32 = 6;
 const SCREEN_MARGIN_PX: i32 = 5;
 const OPEN_REFRESH_FRESHNESS: Duration = Duration::from_secs(5);
+const MOBILE_REFRESH_FRESHNESS: Duration = Duration::from_secs(30);
 const MAX_RPC_CONCURRENCY: usize = 8;
 const INTERACTIVE_REFRESH_CONCURRENCY: usize = 8;
 const INTERACTIVE_DISCOVERY_CONCURRENCY: usize = 2;
@@ -56,9 +58,8 @@ fn handle_mobile_command(arguments: &[std::ffi::OsString]) -> bool {
     match command {
         "--mobile-enable" => {
             config.mobile.enabled = true;
-            if config.mobile.access_token.as_ref().is_none_or(|token| token.len() < 32) {
-                config.mobile.access_token = Some(new_mobile_token());
-            }
+            config.mobile.allow_lan = Some(true);
+            config.mobile.bind = "0.0.0.0".into();
             match config::save(&config) {
                 Ok(()) => println!(
                     "Mobile access enabled on {}:{}. Restart Agents Usage to apply it.",
@@ -75,10 +76,10 @@ fn handle_mobile_command(arguments: &[std::ffi::OsString]) -> bool {
             }
         }
         "--mobile-rotate-token" => {
-            config.mobile.access_token = Some(new_mobile_token());
+            mobile::revoke_all_devices(&mut config);
             match config::save(&config) {
-                Ok(()) => println!("Mobile pairing token rotated. Restart Agents Usage and pair phones again."),
-                Err(error) => eprintln!("Could not rotate the mobile pairing token: {error}"),
+                Ok(()) => println!("All paired phones were revoked. Generate a new pairing link for each phone."),
+                Err(error) => eprintln!("Could not revoke paired phones: {error}"),
             }
         }
         "--mobile-pairing-url" => {
@@ -86,12 +87,16 @@ fn handle_mobile_command(arguments: &[std::ffi::OsString]) -> bool {
                 eprintln!("Usage: agents-usage --mobile-pairing-url <http-or-https-base-url>");
                 return true;
             };
-            let Some(token) = config.mobile.access_token.filter(|token| token.len() >= 32) else {
-                eprintln!("Mobile access has no pairing token. Run --mobile-enable first.");
+            if !config.mobile.enabled {
+                eprintln!("Mobile access is disabled. Run --mobile-enable first.");
                 return true;
-            };
+            }
+            let token = mobile::create_pairing(&mut config, 1);
             match mobile_pairing_url(base_url, &token) {
-                Ok(url) => println!("{url}"),
+                Ok(url) => match config::save(&config) {
+                    Ok(()) => println!("{url}"),
+                    Err(error) => eprintln!("Could not save the one-time pairing link: {error}"),
+                },
                 Err(error) => eprintln!("Could not create pairing URL: {error}"),
             }
         }
@@ -100,28 +105,130 @@ fn handle_mobile_command(arguments: &[std::ffi::OsString]) -> bool {
     true
 }
 
-fn new_mobile_token() -> String {
-    format!("{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple())
-}
-
 fn mobile_pairing_url(base_url: &str, token: &str) -> Result<String, &'static str> {
-    let base_url = base_url.trim().trim_end_matches('/');
-    let lower = base_url.to_ascii_lowercase();
-    let remainder = lower
-        .strip_prefix("https://")
-        .or_else(|| lower.strip_prefix("http://"))
-        .ok_or("the base URL must start with http:// or https://")?;
-    let authority = remainder.split('/').next().unwrap_or_default();
-    if authority.is_empty() || authority.contains('@') {
+    let mut base = url::Url::parse(base_url.trim())
+        .map_err(|_| "the base URL must be a valid HTTP or HTTPS URL")?;
+    if !matches!(base.scheme(), "http" | "https") {
+        return Err("the base URL must start with http:// or https://");
+    }
+    if base.host_str().is_none() || !base.username().is_empty() || base.password().is_some() {
         return Err("the base URL must contain a desktop hostname without credentials");
     }
-    if base_url.chars().any(char::is_whitespace) || base_url.contains(['?', '#']) {
+    if base.query().is_some() || base.fragment().is_some() {
         return Err("the base URL must not contain whitespace, a query, or a fragment");
     }
     if token.len() < 32 || !token.bytes().all(|byte| byte.is_ascii_alphanumeric() || b"._~-".contains(&byte)) {
         return Err("the mobile pairing token is invalid");
     }
-    Ok(format!("{base_url}/pair?token={token}"))
+    if !base.path().ends_with('/') {
+        base.path_segments_mut()
+            .map_err(|_| "the base URL path is invalid")?
+            .push("");
+    }
+    let path = base.path().to_string();
+    let mut pairing = base.join("pair").map_err(|_| "the base URL path is invalid")?;
+    pairing.query_pairs_mut().append_pair("token", token).append_pair("path", &path);
+    Ok(pairing.into())
+}
+
+#[derive(Clone, Debug, Default)]
+struct MobileEndpoints {
+    lan: Option<String>,
+    tailscale: Option<String>,
+}
+
+fn discover_mobile_endpoints(port: u16) -> MobileEndpoints {
+    let route_address = |bind: &str, destination: &str| {
+        std::net::UdpSocket::bind(bind)
+            .and_then(|socket| {
+                socket.connect(destination)?;
+                socket.local_addr()
+            })
+            .ok()
+            .map(|address| address.ip())
+    };
+    let lan = route_address("0.0.0.0:0", "192.0.2.1:80")
+        .filter(|address| matches!(address, std::net::IpAddr::V4(value) if value.is_private() || value.is_link_local()))
+        .or_else(|| {
+            route_address("[::]:0", "[2001:db8::1]:80")
+                .filter(|address| matches!(address, std::net::IpAddr::V6(value) if value.is_unique_local()))
+        })
+        .map(|address| mobile_lan_url(address, port));
+
+    let tailscale = std::process::Command::new("tailscale")
+        .args(["status", "--json"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| serde_json::from_slice::<serde_json::Value>(&output.stdout).ok())
+        .and_then(|value| value.get("Self")?.get("DNSName")?.as_str().map(str::to_string))
+        .map(|name| name.trim_end_matches('.').to_string())
+        .filter(|name| !name.is_empty())
+        .map(|name| format!("https://{name}/agents-usage/"));
+
+    MobileEndpoints { lan, tailscale }
+}
+
+fn mobile_lan_url(address: std::net::IpAddr, port: u16) -> String {
+    match address {
+        std::net::IpAddr::V4(address) => format!("http://{address}:{port}/"),
+        std::net::IpAddr::V6(address) => format!("http://[{address}]:{port}/"),
+    }
+}
+
+fn percent_encode_query(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || b"-._~".contains(&byte) {
+            encoded.push(char::from(byte));
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    encoded
+}
+
+fn mobile_pairing_bundle(endpoints: &MobileEndpoints, token: &str) -> Result<String, &'static str> {
+    let mut bases = [endpoints.lan.as_deref(), endpoints.tailscale.as_deref()]
+        .into_iter()
+        .flatten();
+    let Some(primary) = bases.next() else {
+        return Err("no LAN or Tailscale address could be detected");
+    };
+    mobile_pairing_url(primary, token)?;
+    let mut bundle = format!(
+        "agents-usage://pair?token={token}&base={}",
+        percent_encode_query(primary)
+    );
+    if let Some(fallback) = bases.next() {
+        mobile_pairing_url(fallback, token)?;
+        bundle.push_str("&fallback=");
+        bundle.push_str(&percent_encode_query(fallback));
+    }
+    Ok(bundle)
+}
+
+fn qr_cell_model(value: &str) -> ModelRc<QrCell> {
+    let Ok(code) = qrcode::QrCode::new(value.as_bytes()) else {
+        return ModelRc::default();
+    };
+    let width = code.width();
+    let module_size = (140 / width.max(1)).max(1) as f32;
+    let rendered = module_size * width as f32;
+    let offset = (156.0 - rendered) / 2.0;
+    let mut cells = Vec::new();
+    for y in 0..width {
+        for x in 0..width {
+            if code[(x, y)] == qrcode::types::Color::Dark {
+                cells.push(QrCell {
+                    x: offset + x as f32 * module_size,
+                    y: offset + y as f32 * module_size,
+                    size: module_size,
+                });
+            }
+        }
+    }
+    ModelRc::new(VecModel::from(cells))
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -176,13 +283,66 @@ enum WorkerCommand {
     ToggleAtPoint { x: i32, y: i32, icon_w: i32, icon_h: i32 },
     Refresh,
     RefreshIfStale,
+    RefreshIfStaleMobile,
     PersistSettings,
+    MobileConfigChanged,
+    MobileDeviceListChanged,
     ConsumeReset { account_id: String, credit_id: String },
     HidePanel,
     #[cfg(target_os = "linux")]
     CheckPopupFocus,
     Tick,
     Quit,
+}
+
+struct MobileServerHandle {
+    shutdown: oneshot::Sender<()>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl MobileServerHandle {
+    async fn stop(self) {
+        let _ = self.shutdown.send(());
+        let _ = self.task.await;
+    }
+}
+
+fn start_mobile_server(
+    accounts: Arc<Mutex<Vec<AccountRecord>>>,
+    config: Arc<Mutex<AppConfig>>,
+    refreshing: Arc<AtomicBool>,
+    tx: UnboundedSender<WorkerCommand>,
+    ui: slint::Weak<MainWindow>,
+) -> Option<MobileServerHandle> {
+    let mobile_config = config.lock().ok().map(|cfg| cfg.mobile.clone()).unwrap_or_default();
+    if !mobile_config.enabled {
+        return None;
+    }
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let (ready_tx, ready_rx) = oneshot::channel::<Result<String, String>>();
+    let ready_ui = ui.clone();
+    tokio::spawn(async move {
+        if let Ok(status) = ready_rx.await {
+            let message = status.unwrap_or_else(|error| error);
+            let _ = ready_ui.upgrade_in_event_loop(move |ui| ui.set_mobile_status(message.into()));
+        }
+    });
+    let task = tokio::spawn(async move {
+        if let Err(error) = mobile::serve(
+            mobile_config,
+            accounts,
+            config,
+            refreshing,
+            tx,
+            shutdown_rx,
+            ready_tx,
+        )
+        .await
+        {
+            eprintln!("mobile: server stopped: {error}");
+        }
+    });
+    Some(MobileServerHandle { shutdown: shutdown_tx, task })
 }
 
 fn infer_panel_edge(icon_x: i32, icon_y: i32, icon_w: i32, icon_h: i32, monitor: (i32, i32, i32, i32)) -> PanelEdge {
@@ -719,6 +879,37 @@ fn render_ui(
     ui.set_usage_bar_color_mode(cfg.usage_bar_color_mode.as_str().into());
     ui.set_usage_bar_custom_color(ui_model::color_from_name(&cfg.usage_bar_custom_color));
     ui.set_pin_short_global(cfg.pin_short_global);
+    ui.set_mobile_enabled(cfg.mobile.enabled);
+    ui.set_mobile_allow_lan(cfg.mobile.allows_lan());
+    if !cfg.mobile.enabled {
+        ui.set_mobile_status("Disabled".into());
+    } else if ui.get_mobile_status() == "Disabled" {
+        ui.set_mobile_status(format!("Starting on port {}…", cfg.mobile.port).into());
+    }
+    let now = chrono::Utc::now().timestamp();
+    let mobile_devices = cfg
+        .mobile
+        .devices
+        .iter()
+        .filter(|device| device.expires_at >= now)
+        .map(|device| MobileDeviceView {
+            id: device.id.clone().into(),
+            name: device.name.clone().into(),
+            detail: match device.last_seen_at {
+                Some(last_seen) if now - last_seen < 120 => "Seen recently".into(),
+                Some(last_seen) => format!("Last seen {}h ago", ((now - last_seen) / 3600).max(1)).into(),
+                None => "Paired before this update".into(),
+            },
+        })
+        .collect::<Vec<_>>();
+    ui.set_mobile_devices(ModelRc::new(VecModel::from(mobile_devices)));
+    let pairing_active = cfg.mobile.pairing.as_ref().is_some_and(|pairing| {
+        pairing.expires_at >= now && pairing.remaining_uses > 0
+    });
+    if !pairing_active {
+        ui.set_mobile_pairing_link("".into());
+        ui.set_mobile_qr_cells(ModelRc::default());
+    }
     ui.set_accounts_summary(format!("{} discovered · refresh also checks for new Codex homes", records.len()).into());
     if let Some(text) = empty_text { ui.set_empty_text(text.into()); }
     ui.set_desired_height_px(height);
@@ -1556,20 +1747,9 @@ fn spawn_worker(
                 let rpc_semaphore = Arc::new(Semaphore::new(MAX_RPC_CONCURRENCY));
                 let last_data_refresh = Arc::new(Mutex::new(None::<Instant>));
 
-                let mobile_config = config.lock().ok().map(|cfg| cfg.mobile.clone()).unwrap_or_default();
-                if mobile_config.enabled {
-                    let mobile_accounts = accounts.clone();
-                    let mobile_app_config = config.clone();
-                    let mobile_refreshing = refreshing.clone();
-                    let mobile_tx = tx.clone();
-                    tokio::spawn(async move {
-                        if let Err(error) = mobile::serve(
-                            mobile_config, mobile_accounts, mobile_app_config, mobile_refreshing, mobile_tx,
-                        ).await {
-                            eprintln!("mobile: server stopped: {error}");
-                        }
-                    });
-                }
+                let mut mobile_server = start_mobile_server(
+                    accounts.clone(), config.clone(), refreshing.clone(), tx.clone(), ui.clone(),
+                );
                 #[cfg(target_os = "linux")]
                 let popup_focus_seen = Arc::new(AtomicBool::new(false));
 
@@ -1661,17 +1841,22 @@ fn spawn_worker(
                             });
                             if opening { send(&tx, WorkerCommand::RefreshIfStale); }
                         }
-                        refresh_command @ (WorkerCommand::Refresh | WorkerCommand::RefreshIfStale) => {
+                        refresh_command @ (WorkerCommand::Refresh | WorkerCommand::RefreshIfStale | WorkerCommand::RefreshIfStaleMobile) => {
                             let force = matches!(refresh_command, WorkerCommand::Refresh);
                             if !force {
+                                let freshness = if matches!(refresh_command, WorkerCommand::RefreshIfStaleMobile) {
+                                    MOBILE_REFRESH_FRESHNESS
+                                } else {
+                                    OPEN_REFRESH_FRESHNESS
+                                };
                                 let still_fresh = last_data_refresh
                                     .lock()
                                     .ok()
                                     .and_then(|value| *value)
-                                .map(|when| when.elapsed() < OPEN_REFRESH_FRESHNESS)
+                                .map(|when| when.elapsed() < freshness)
                                     .unwrap_or(false);
                                 if still_fresh {
-                                    eprintln!("refresh: open skipped because account data is less than {}s old", OPEN_REFRESH_FRESHNESS.as_secs());
+                                    eprintln!("refresh: skipped because account data is less than {}s old", freshness.as_secs());
                                     continue;
                                 }
                             }
@@ -1749,6 +1934,23 @@ fn spawn_worker(
                             });
                         }
                         WorkerCommand::PersistSettings => persist_config(&config),
+                        WorkerCommand::MobileConfigChanged => {
+                            persist_config(&config);
+                            if let Some(server) = mobile_server.take() {
+                                server.stop().await;
+                            }
+                            mobile_server = start_mobile_server(
+                                accounts.clone(), config.clone(), refreshing.clone(), tx.clone(), ui.clone(),
+                            );
+                            schedule_render(
+                                ui.clone(), accounts.clone(), config.clone(), last_anchor_shared.clone(), None,
+                            );
+                        }
+                        WorkerCommand::MobileDeviceListChanged => {
+                            schedule_render(
+                                ui.clone(), accounts.clone(), config.clone(), last_anchor_shared.clone(), None,
+                            );
+                        }
                         WorkerCommand::ConsumeReset { account_id, credit_id } => {
                             let Some(codex_path) = codex_path.clone() else { continue; };
                             let _ = ui.upgrade_in_event_loop(|ui| ui.set_reset_busy(true));
@@ -1788,6 +1990,11 @@ fn spawn_worker(
                         }
                     }
                 }
+
+                if let Some(server) = mobile_server.take() {
+                    server.stop().await;
+                }
+                persist_config(&config);
 
                 panel_visible.store(false, Ordering::SeqCst);
                 #[cfg(target_os = "linux")]
@@ -1901,6 +2108,11 @@ fn main() -> Result<(), slint::PlatformError> {
     ui.window().on_close_requested(|| CloseRequestResponse::HideWindow);
 
     let mut loaded_config = config::load();
+    if mobile::migrate_legacy_access(&mut loaded_config) {
+        if let Err(error) = config::save(&loaded_config) {
+            eprintln!("mobile: could not persist the safer per-device session migration: {error}");
+        }
+    }
     let loaded_cache = config::load_usage_cache();
     let (loaded_cache, reconciled) = reconcile_cached_accounts(&mut loaded_config, loaded_cache);
     if reconciled {
@@ -1945,6 +2157,12 @@ fn main() -> Result<(), slint::PlatformError> {
     let panel_visible = Arc::new(AtomicBool::new(false));
     let (tx, rx) = unbounded_channel::<WorkerCommand>();
 
+    let initial_mobile_endpoints = discover_mobile_endpoints(
+        config.lock().ok().map(|cfg| cfg.mobile.port).unwrap_or(3765),
+    );
+    ui.set_mobile_lan_url(initial_mobile_endpoints.lan.unwrap_or_default().into());
+    ui.set_mobile_tailscale_url(initial_mobile_endpoints.tailscale.unwrap_or_default().into());
+
     #[cfg(any(target_os = "windows", target_os = "macos"))]
     let _native_tray = match create_native_tray(tx.clone()) {
         Ok(tray) => Some(tray),
@@ -1964,6 +2182,149 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let tx = tx.clone();
         ui.on_settings_requested(move || send(&tx, WorkerCommand::OpenSettings));
+    }
+    {
+        let ui_weak = ui.as_weak();
+        let config = config.clone();
+        let tx = tx.clone();
+        ui.on_mobile_enabled_changed(move |enabled| {
+            if let Ok(mut config) = config.lock() {
+                config.mobile.enabled = enabled;
+                if !enabled {
+                    config.mobile.pairing = None;
+                }
+            }
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_mobile_status(if enabled { "Starting…".into() } else { "Disabled".into() });
+                if !enabled {
+                    ui.set_mobile_pairing_link("".into());
+                    ui.set_mobile_qr_cells(ModelRc::default());
+                }
+            }
+            send(&tx, WorkerCommand::MobileConfigChanged);
+        });
+    }
+    {
+        let ui_weak = ui.as_weak();
+        let config = config.clone();
+        let tx = tx.clone();
+        ui.on_mobile_allow_lan_changed(move |allow| {
+            if let Ok(mut config) = config.lock() {
+                config.mobile.allow_lan = Some(allow);
+                config.mobile.bind = if allow { "0.0.0.0".into() } else { "127.0.0.1".into() };
+            }
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_mobile_status(
+                    if allow { "Restarting with private LAN access…".into() }
+                    else { "Restarting in Tailscale-only mode…".into() },
+                );
+            }
+            send(&tx, WorkerCommand::MobileConfigChanged);
+        });
+    }
+    {
+        let ui_weak = ui.as_weak();
+        let config = config.clone();
+        let tx = tx.clone();
+        ui.on_mobile_create_pairing(move || {
+            let port = config.lock().ok().map(|cfg| cfg.mobile.port).unwrap_or(3765);
+            let allow_lan = config.lock().ok().is_some_and(|cfg| cfg.mobile.allows_lan());
+            let mut endpoints = discover_mobile_endpoints(port);
+            if !allow_lan { endpoints.lan = None; }
+            let uses = u8::from(endpoints.lan.is_some()) + u8::from(endpoints.tailscale.is_some());
+            if uses == 0 {
+                if let Some(ui) = ui_weak.upgrade() {
+                    ui.set_mobile_status("Set up Tailscale or turn on Allow direct LAN first.".into());
+                }
+                return;
+            }
+            let token = if let Ok(mut config) = config.lock() {
+                if !config.mobile.enabled {
+                    config.mobile.enabled = true;
+                }
+                mobile::create_pairing(&mut config, uses)
+            } else {
+                return;
+            };
+            let Ok(bundle) = mobile_pairing_bundle(&endpoints, &token) else {
+                if let Some(ui) = ui_weak.upgrade() {
+                    ui.set_mobile_status("The detected phone addresses were invalid.".into());
+                }
+                return;
+            };
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_mobile_lan_url(endpoints.lan.unwrap_or_default().into());
+                ui.set_mobile_tailscale_url(endpoints.tailscale.unwrap_or_default().into());
+                ui.set_mobile_pairing_link(bundle.clone().into());
+                ui.set_mobile_qr_cells(qr_cell_model(&bundle));
+                ui.set_mobile_status("Pairing link ready · expires in 10 minutes".into());
+            }
+            send(&tx, WorkerCommand::PersistSettings);
+        });
+    }
+    {
+        let ui_weak = ui.as_weak();
+        ui.on_mobile_copy_pairing(move || {
+            let Some(ui) = ui_weak.upgrade() else { return; };
+            let link = ui.get_mobile_pairing_link();
+            if link.is_empty() { return; }
+            match ClipboardContext::new().and_then(|mut clipboard| clipboard.set_contents(link.to_string())) {
+                Ok(()) => ui.set_mobile_status("Private pairing link copied".into()),
+                Err(_) => ui.set_mobile_status("Could not access the system clipboard.".into()),
+            }
+        });
+    }
+    {
+        let ui_weak = ui.as_weak();
+        let config = config.clone();
+        ui.on_mobile_configure_tailscale(move || {
+            let ui_weak = ui_weak.clone();
+            let port = config.lock().ok().map(|cfg| cfg.mobile.port).unwrap_or(3765);
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_mobile_status("Configuring private Tailscale HTTPS…".into());
+            }
+            thread::spawn(move || {
+                let target = format!("http://127.0.0.1:{port}");
+                let result = std::process::Command::new("tailscale")
+                    .args(["serve", "--bg", "--set-path", "/agents-usage", &target])
+                    .output();
+                let endpoints = discover_mobile_endpoints(port);
+                let status = match result {
+                    Ok(output) if output.status.success() => "Tailscale HTTPS is configured.".to_string(),
+                    Ok(output) => {
+                        let message = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                        if message.is_empty() {
+                            format!("Tailscale setup failed with {}.", output.status)
+                        } else {
+                            format!("Tailscale setup needs attention: {message}")
+                        }
+                    }
+                    Err(_) => "Tailscale was not found. Install it, sign in, then try again.".into(),
+                };
+                let _ = ui_weak.upgrade_in_event_loop(move |ui| {
+                    ui.set_mobile_lan_url(endpoints.lan.unwrap_or_default().into());
+                    ui.set_mobile_tailscale_url(endpoints.tailscale.unwrap_or_default().into());
+                    ui.set_mobile_status(status.into());
+                });
+            });
+        });
+    }
+    {
+        let ui_weak = ui.as_weak();
+        let accounts = accounts.clone();
+        let config = config.clone();
+        let last_anchor = last_anchor_shared.clone();
+        let tx = tx.clone();
+        ui.on_mobile_revoke_device(move |id| {
+            let changed = config.lock().is_ok_and(|mut config| mobile::revoke_device(&mut config, id.as_str()));
+            if changed {
+                send(&tx, WorkerCommand::PersistSettings);
+                if let Some(ui) = ui_weak.upgrade() {
+                    render_ui(&ui, &accounts, &config, &last_anchor, None);
+                    ui.set_mobile_status("Phone access revoked".into());
+                }
+            }
+        });
     }
     {
         let ui_weak = ui.as_weak();
@@ -2330,9 +2691,10 @@ fn main() -> Result<(), slint::PlatformError> {
 mod tests {
     use super::{
         LaunchMode, PanelAnchor, PanelEdge, SCREEN_MARGIN_PX, desktop_uses_status_notifier, infer_panel_edge,
-        launch_mode, mobile_pairing_url, move_account, move_target, normalized_account_color,
+        launch_mode, mobile_lan_url, mobile_pairing_bundle, mobile_pairing_url, move_account, move_target, normalized_account_color,
         normalized_display_name, panel_position_for_size, placeholder_record, reconcile_cached_accounts,
     };
+    use super::MobileEndpoints;
     use crate::config::{AccountPreference, AppConfig};
     use crate::domain::{CachedUsage, UsageSnapshot};
     use std::fs;
@@ -2353,12 +2715,50 @@ mod tests {
         let token = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
         assert_eq!(
             mobile_pairing_url(" https://desktop.example.ts.net/agents-usage/ ", token).unwrap(),
-            format!("https://desktop.example.ts.net/agents-usage/pair?token={token}")
+            format!("https://desktop.example.ts.net/agents-usage/pair?token={token}&path=%2Fagents-usage%2F")
+        );
+        assert_eq!(
+            mobile_pairing_url("http://192.168.1.20:3765", token).unwrap(),
+            format!("http://192.168.1.20:3765/pair?token={token}&path=%2F")
+        );
+        assert_eq!(
+            mobile_pairing_url("http://[fd00::20]:3765/Phone%20View", token).unwrap(),
+            format!("http://[fd00::20]:3765/Phone%20View/pair?token={token}&path=%2FPhone%2520View%2F")
         );
         assert!(mobile_pairing_url("ftp://desktop.example", token).is_err());
         assert!(mobile_pairing_url("https://user@desktop.example", token).is_err());
         assert!(mobile_pairing_url("https://desktop.example/path?wrong=1", token).is_err());
+        assert!(mobile_pairing_url("https://desktop.example/path#wrong", token).is_err());
         assert!(mobile_pairing_url("https://desktop.example", "short").is_err());
+    }
+
+    #[test]
+    fn mobile_lan_urls_bracket_ipv6_literals() {
+        assert_eq!(
+            mobile_lan_url("192.168.1.20".parse().unwrap(), 3765),
+            "http://192.168.1.20:3765/"
+        );
+        assert_eq!(
+            mobile_lan_url("fd00::20".parse().unwrap(), 3765),
+            "http://[fd00::20]:3765/"
+        );
+    }
+
+    #[test]
+    fn mobile_pairing_bundle_carries_lan_and_tailscale_without_duplicating_the_token() {
+        let token = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let bundle = mobile_pairing_bundle(
+            &MobileEndpoints {
+                lan: Some("http://192.168.1.20:3765/".into()),
+                tailscale: Some("https://desktop.example.ts.net/agents-usage/".into()),
+            },
+            token,
+        )
+        .unwrap();
+        assert!(bundle.starts_with("agents-usage://pair?token="));
+        assert_eq!(bundle.matches(token).count(), 1);
+        assert!(bundle.contains("&base=http%3A%2F%2F192.168.1.20%3A3765%2F"));
+        assert!(bundle.contains("&fallback=https%3A%2F%2Fdesktop.example.ts.net%2Fagents-usage%2F"));
     }
 
     #[test]

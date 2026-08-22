@@ -26,37 +26,23 @@ Agents Usage can serve a phone-sized companion while keeping Codex and all accou
 
 Download the **Agents Usage Android APK** from [GitHub Releases](https://github.com/rayan6ms/agents-usage/releases/latest). It supports Android 8.0 and newer and needs no account, root access, Termux, or USB connection.
 
-Enable it once, then restart Agents Usage:
+Open desktop **Settings → Phone companion** and turn it on. New installations listen only on the desktop loopback interface, which is the safest default for Tailscale Serve. Turn on **Allow direct LAN** only if you want same-network access, then press **Pair a phone**. Agents Usage detects the routes you enabled and displays one short-lived QR code for them. Scan it with the phone camera and the Android app tests each authenticated address before opening the usage view. No desktop restart or terminal is normally required.
+
+**Set up Tailscale** configures a private HTTPS path for access away from home. Tailscale must already be installed and signed into the same tailnet on both devices; an operating system may still request administrator approval. If explicitly enabled, direct LAN access uses TCP `3765`, so the desktop firewall may require one private-network approval. Never forward this port on a router and do not enable Tailscale Funnel.
+
+Each phone receives an independent six-month session and can be revoked from desktop settings without disconnecting other phones. Pairing links expire after ten minutes, are valid only for the addresses included in that pairing operation, and are removed from the phone after use. Android health-checks the saved routes, switches between LAN and Tailscale after network changes, and exposes a visible Connections button.
+
+Command-line controls remain available for recovery and scripted setups:
 
 ```bash
 agents-usage --mobile-enable
-```
-
-The service listens on TCP port `3765` and requires a private 256-bit pairing token. Generate a pairing link using either the desktop's LAN address or a Tailscale HTTPS base URL:
-
-```bash
 agents-usage --mobile-pairing-url http://192.168.1.20:3765
 agents-usage --mobile-pairing-url https://desktop.example.ts.net/agents-usage
-```
-
-Paste the generated link into the Android app and tap **Pair**. Add both a LAN link and a Tailscale link if desired; the app remembers only their non-secret base addresses and automatically tries another saved connection when one is unreachable.
-
-For encrypted access at home or away, with no public port exposed, proxy the service through Tailscale Serve:
-
-```bash
-tailscale serve --bg --set-path /agents-usage http://127.0.0.1:3765
-```
-
-Direct LAN access works at `http://DESKTOP_LAN_IP:3765`, subject to the desktop firewall. Tailscale access works anywhere that both devices are connected to the same tailnet. Do not use port forwarding or Tailscale Funnel: this view is intended to remain private. Keep every pairing link private because anyone who has one and can reach the desktop can view usage and request a refresh.
-
-To revoke paired phones, rotate the token and restart the app. To stop listening, disable mobile access and restart:
-
-```bash
-agents-usage --mobile-rotate-token
+agents-usage --mobile-rotate-token   # revokes every paired phone
 agents-usage --mobile-disable
 ```
 
-See the [complete phone setup and troubleshooting guide](docs/mobile-companion.md), including LAN, Tailscale, APK verification, connection management, and the security model.
+See the [complete phone setup and troubleshooting guide](docs/mobile-companion.md) for APK verification, system-specific firewall notes, CLI recovery, updates, connection management, and the full support/security model.
 
 ## Current limitations
 
@@ -73,6 +59,15 @@ Rust 1.92 or newer is required.
 cargo test --locked
 cargo build --release --locked
 ```
+
+The Android companion additionally requires JDK 17 and the Android SDK. Its checked-in Gradle wrapper verifies the downloaded Gradle distribution:
+
+```bash
+cd mobile-android
+./gradlew --no-daemon test lintDebug assembleDebug
+```
+
+Release APK signing is intentionally configured only through external environment variables; see [the release checklist](docs/releasing.md). The signing key and passwords must never be added to the repository.
 
 ## License
 

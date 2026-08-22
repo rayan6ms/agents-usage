@@ -1,134 +1,145 @@
 # Phone companion setup
 
-The Agents Usage phone companion is a read-only view of the usage information already collected by the desktop app. Codex remains installed and signed in only on the desktop. The Android app does not contain a provider sign-in, account-management controls, reset-credit controls, or desktop file access.
+The phone companion is a read-only view of usage already collected by the desktop app. Codex stays installed and signed in on the desktop. The phone cannot view credentials or local paths, change account settings, or consume reset credits; its only desktop action is Refresh.
 
-## What you need
+## Requirements and supported configurations
 
-- Agents Usage 0.3.0 or newer running on the desktop.
-- Android 8.0 or newer.
-- For LAN access, both devices on the same private network.
-- For remote private access, Tailscale on both devices and both signed into the same tailnet.
+- Agents Usage 0.3.0 or newer, running in a logged-in desktop session.
+- Android 8.0/API 26 or newer with Android System WebView enabled.
+- For LAN: both devices on the same private network without guest/client isolation.
+- For remote access: Tailscale on both devices, signed into the same tailnet.
 
-Root, ADB, Termux, a permanent USB connection, and a public server are not required.
+Linux, Windows, and macOS builds contain the same companion server. Linux is exercised end-to-end on physical hardware; Windows and macOS are compiled and tested on native CI runners and have platform-specific guidance below. Android CI runs the companion on API 26 and a current API emulator. The browser/PWA view may work on iPhone and iPad over Tailscale HTTPS, but iOS remains an experimental, non-native support tier.
 
-## 1. Install the Android app
+The desktop must remain running and awake. Root, ADB, Termux, a USB cable, a cloud account, a public server, port forwarding, and Tailscale Funnel are not required or recommended.
 
-1. Open the [latest Agents Usage release](https://github.com/rayan6ms/agents-usage/releases/latest) on the phone.
-2. Download `Agents-Usage-VERSION-android.apk` and its adjacent `.sha256` file.
-3. If desired, verify the APK with a checksum utility. Its SHA-256 value must match the line in the `.sha256` file.
-4. Open the APK. Android may ask you to allow installs from the browser or file manager because the app is distributed directly through GitHub.
+## 1. Install and update Android
 
-Future GitHub APKs use the same release signing key, so Android can install them as updates without losing saved connections.
+1. Open the [latest release](https://github.com/rayan6ms/agents-usage/releases/latest) on the phone.
+2. Download `Agents-Usage-VERSION-android.apk` and its `.sha256` file.
+3. Optionally verify the APK checksum, then open it. Android may request permission for the browser or file manager to install unknown apps.
+4. Future release APKs install over the existing application and retain its connections. **Check for app updates** in the Connections screen opens the official releases page. Obtainium users can also track this repository's APK releases.
 
-The official Android signing-certificate SHA-256 fingerprint is:
+The official signing-certificate SHA-256 fingerprint is:
 
 ```text
 c9a8159f30df08f5b5613ea0b438d4746c292f600aca3bc9ab48f5c5d7a540bf
 ```
 
-## 2. Enable the desktop service
+Debug builds have a different package ID and signing key and can coexist with the release app.
 
-Run:
+## 2. Pair from desktop settings
+
+1. Open Agents Usage **Settings**.
+2. Turn on **Phone companion**. The server starts immediately on loopback TCP `3765`; no restart is needed.
+3. Choose the routes you actually need:
+   - For private remote access, press **Set up Tailscale**. This runs the equivalent of:
+
+     ```bash
+     tailscale serve --bg --set-path /agents-usage http://127.0.0.1:3765
+     ```
+
+   - For direct same-network access, turn on **Allow direct LAN**. This changes the listener to all local interfaces; only do this on a network you trust.
+
+4. Press **Pair a phone**. The desktop detects its primary private LAN route and Tailscale DNS name and creates one QR code containing the available addresses.
+5. Scan the QR code with the phone's normal camera. If its camera does not open custom links, use **Copy private link**, transfer it through a trusted channel, then paste it into the Android app.
+
+The link expires after ten minutes. The phone pairs each included origin, saves only the non-secret base addresses, tests them through an authenticated health endpoint, and opens the first working one.
+
+### What still requires manual approval
+
+- Android must approve installation when the APK is installed outside an app store.
+- If **Allow direct LAN** is on, Windows, macOS, or a Linux firewall may ask whether TCP `3765` is allowed on private networks.
+- Tailscale must be installed, signed in, and permitted by its tailnet policy. Windows may require an elevated terminal to configure Serve.
+- A guest Wi-Fi network may intentionally prevent devices from reaching one another; switch networks or use Tailscale.
+
+These prompts protect system or network boundaries and are intentionally not bypassed.
+
+## Connections and failover
+
+The Android app health-checks the current endpoint every 15 seconds and whenever Android reports a network change. It does not rely on a cached web page to decide whether the desktop is reachable. If LAN fails, it probes Tailscale; when LAN returns it continues using the current healthy route until a reconnect is needed.
+
+Tap the visible Connections icon in the usage header, or press Android Back, to manage addresses:
+
+- **Use** probes and selects an address.
+- **Remove** deletes the saved address and its cookie from the phone.
+- **Check for app updates** opens only the official GitHub releases page.
+
+Removing an address locally does not revoke other sessions for that phone. To invalidate the phone everywhere, use **Revoke** beside it in desktop settings. LAN and Tailscale cookies issued during one QR pairing are grouped as one phone.
+
+## Security and privacy
+
+- The server is disabled by default. New configurations bind to loopback after it is enabled; listening on the LAN requires the separate **Allow direct LAN** choice. Existing configurations that already used a LAN bind keep working after upgrade.
+- Pairing uses a random 256-bit token, stored as a SHA-256 hash on the desktop. It expires after ten minutes and has only enough redemptions for the addresses in that pairing bundle.
+- Each phone receives independent random sessions. Only session hashes are stored. Sessions expire after 180 days and can be revoked individually.
+- Cookies are HttpOnly, `SameSite=Strict`, and scoped to `/agents-usage/` behind the Tailscale path rather than the rest of that hostname. HTTPS cookies are marked Secure.
+- The server uses constant-time hash comparison and rate-limits forced Refresh requests.
+- Android rejects certificate errors and public cleartext hosts. File/content access, geolocation, mixed content, third-party cookies, cloud backup, and device-to-device backup are disabled.
+- The WebView can navigate only inside paired origins. Opening the official releases page is a separate, explicit Android action.
+- Do not use router port forwarding or Tailscale Funnel. Anyone holding an unexpired pairing link and able to reach the desktop can pair, so treat the link like a temporary password.
+
+## Platform notes
+
+### Windows
+
+If **Allow direct LAN** is enabled, allow `agents-usage.exe` on **Private networks** if Windows Defender Firewall prompts. Tailscale Serve normally requires an Administrator PowerShell or Terminal. If the desktop user logs out, the tray app stops even when Tailscale unattended mode is enabled.
+
+### macOS
+
+If **Allow direct LAN** is enabled, allow incoming connections for Agents Usage if macOS asks. The tray app and companion stop being available when the user logs out or the Mac sleeps. Tailscale's system extension/App Store variants can expose the same Serve path while the user session is active.
+
+### Linux
+
+If **Allow direct LAN** is enabled and a firewall is active, allow TCP `3765` only from the trusted LAN subnet. Examples vary by distribution (`ufw`, `firewalld`, or nftables), so Agents Usage does not silently change firewall rules. Tailscale access does not require exposing `3765` beyond loopback.
+
+### Address changes and IPv6
+
+The pairing wizard selects the primary private route. On desktops with several VLANs, VPNs, or Wi-Fi adapters, use the command-line fallback below with the address reachable from the phone. A DHCP reservation or stable `.local` name avoids repeated LAN pairing after address changes. IPv4 and IPv6 bind addresses are supported; bracket IPv6 literals in URLs, for example `http://[fd00::20]:3765`.
+
+## Command-line recovery and automation
+
+The settings wizard is preferred. These commands remain available for headless recovery and scripted deployment:
 
 ```bash
 agents-usage --mobile-enable
-```
-
-Quit and reopen Agents Usage once. The companion service listens on TCP port `3765` by default and requires a private 256-bit pairing token. It does not expose Codex credentials, local paths, settings, or reset actions.
-
-## 3A. Pair over the LAN
-
-Find the desktop's private LAN address. It commonly starts with `192.168.`, `10.`, or `172.16` through `172.31`. Then run, replacing the example address:
-
-```bash
 agents-usage --mobile-pairing-url http://192.168.1.20:3765
-```
-
-Copy the resulting private link to the phone, paste it into the Android app, and tap **Pair**. The desktop firewall must allow inbound TCP `3765` from the private network. Do not forward this port on the router.
-
-Plain HTTP is intentionally accepted by the Android app only for loopback, private LAN, link-local, `.local`, and Tailscale CGNAT addresses. A public IP or ordinary hostname must use HTTPS.
-
-## 3B. Pair through Tailscale
-
-Tailscale is the recommended option for access away from home. It provides an encrypted path and does not expose the companion to the public internet.
-
-On the desktop, publish the local companion at a dedicated tailnet-only path:
-
-```bash
-tailscale serve --bg --set-path /agents-usage http://127.0.0.1:3765
-tailscale serve status
-```
-
-Use the HTTPS hostname shown by Tailscale to generate a second pairing link:
-
-```bash
 agents-usage --mobile-pairing-url https://DESKTOP.TAILNET.ts.net/agents-usage
-```
-
-Paste that link into the Android app and tap **Pair**. Tailscale must be connected on both devices. Tailscale Serve is sufficient; do not enable Tailscale Funnel.
-
-If another service already uses the root Tailscale Serve path, `--set-path /agents-usage` leaves it in place.
-
-## Managing connections
-
-The app can save both LAN and Tailscale base addresses. It tries the last working address first and falls back to another saved address after a main-page connection failure.
-
-- Press Android **Back** while viewing usage to open **Saved connections**.
-- Tap **Use** to prefer a connection immediately.
-- Tap **Remove** to forget an address on the phone.
-- Generate and pair a fresh link if the desktop token was rotated.
-
-The pairing URL itself is not kept in the saved-connections list. Authentication is retained as an HttpOnly, same-site cookie scoped to that desktop origin, so the rendered page cannot read it.
-
-## Revoking access
-
-To invalidate every paired browser and phone, rotate the desktop token and restart Agents Usage:
-
-```bash
 agents-usage --mobile-rotate-token
-```
-
-Pair trusted phones again with newly generated links. To turn the service off entirely:
-
-```bash
 agents-usage --mobile-disable
 ```
 
-Quit and reopen Agents Usage after either command.
+`--mobile-pairing-url` creates a new single-use, ten-minute link and an already-running server can import it. Because a separate command cannot safely reconfigure every running desktop process, CLI enable, disable, and revoke-all operations take full effect after Agents Usage is reopened; the settings controls apply immediately. The historical `--mobile-rotate-token` name now revokes every phone and pending pairing rather than maintaining a shared master token.
+
+`--mobile-enable` is an explicit recovery/automation command and enables direct LAN listening. Use the desktop switch when you want the safer loopback-only Tailscale configuration.
 
 ## Troubleshooting
 
-**The phone cannot reach a LAN address**
+**No LAN address is shown**
 
-- Confirm both devices are on the same Wi-Fi/LAN and client isolation or guest-network isolation is disabled.
-- Confirm Agents Usage was restarted after mobile access was enabled.
-- Allow inbound TCP `3765` in the desktop firewall for the private network only.
-- Check that the desktop address has not changed. A DHCP reservation can keep it stable.
+- Turn on **Allow direct LAN** in desktop settings.
+- Confirm the desktop has a private IPv4/IPv6 route and is not connected only through a captive portal.
+- Multi-interface desktops can use `--mobile-pairing-url` with the correct reachable address.
+- Confirm the firewall permits private-network TCP `3765`.
 
-**The Tailscale address does not load**
+**Tailscale is not detected or setup fails**
 
-- Confirm both devices appear connected in `tailscale status`.
-- Run `tailscale serve status` on the desktop and use its exact HTTPS hostname and `/agents-usage` path.
-- Confirm the local desktop view responds before involving Tailscale: `http://127.0.0.1:3765`.
+- Run `tailscale status` and confirm the desktop and phone are in the same tailnet.
+- On Windows, retry the displayed command in an elevated terminal.
+- Confirm tailnet access-control rules permit the phone to reach the desktop.
+- Run `tailscale serve status` and verify `/agents-usage` points to `http://127.0.0.1:3765`.
 
-**The app says pairing was rejected**
+**Pairing was rejected**
 
-- Generate a new pairing link from the currently running desktop configuration.
-- If the token was rotated, restart the desktop app and pair each phone again.
-- Copy the whole link; truncated tokens are rejected.
+- Generate a new QR/link; old links expire after ten minutes and cannot be reused beyond their included routes.
+- Copy the complete link through a trusted channel.
 
-**The app was installed but Android will not update it**
+**The view worked but became unavailable**
 
-- Install release APKs from this repository over other release APKs. Debug builds use a separate package ID and signature.
-- If Android reports a signature mismatch, remove the APK obtained from the other source before installing the official GitHub release. Removing an app also removes its saved connections.
+- Wake the desktop and confirm Agents Usage is still running.
+- Open Connections; the app will probe every saved route rather than trusting its cached page.
+- Check whether the desktop's DHCP address changed or Tailscale disconnected.
 
-## Security model
+**Android refuses an update**
 
-- The server is off by default and uses a random 256-bit bearer token.
-- Pairing sets an HttpOnly, `SameSite=Strict` cookie. API calls without it receive `401 Unauthorized`.
-- The Android WebView has file access, content access, geolocation, third-party cookies, and mixed content disabled. Certificate errors are rejected.
-- Navigation is limited to saved desktop origins. HTTPS is required except for explicitly private address ranges.
-- Android cloud backup and device-to-device transfer are disabled for the companion's connection and cookie data.
-- The only mutating API available to the phone is **Refresh**. Account settings, credentials, paths, and reset-credit consumption are not served.
-
-Anyone holding a pairing link can authenticate while they can reach the desktop. Treat it like a password: share it only through a trusted channel, never paste it into an issue or chat room, and rotate it if it may have leaked.
+- Install release APKs from this repository over other official release APKs.
+- A signature mismatch means the installed APK came from another signing key. Uninstalling it removes its saved connections, after which the official package can be installed and paired again.
