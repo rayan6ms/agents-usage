@@ -46,7 +46,7 @@ whoami = "1.6"
 ksni = "0.3.6"
 raw-window-handle = "0.6"
 secret-service = { version = "5.1", default-features = false, features = ["rt-tokio-crypto-rust"] }
-x11rb = "0.13.2"
+x11rb = "0.14.0"
 zbus = { version = "5", default-features = false, features = ["tokio"] }
 
 [target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
