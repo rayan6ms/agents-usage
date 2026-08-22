@@ -891,7 +891,7 @@ fn render_ui(
         .mobile
         .devices
         .iter()
-        .filter(|device| device.expires_at >= now)
+        .filter(|device| mobile::device_is_active(device, now))
         .map(|device| MobileDeviceView {
             id: device.id.clone().into(),
             name: device.name.clone().into(),
@@ -2108,9 +2108,11 @@ fn main() -> Result<(), slint::PlatformError> {
     ui.window().on_close_requested(|| CloseRequestResponse::HideWindow);
 
     let mut loaded_config = config::load();
-    if mobile::migrate_legacy_access(&mut loaded_config) {
+    let migrated_mobile_access = mobile::migrate_legacy_access(&mut loaded_config);
+    let migrated_persistent_sessions = mobile::make_device_sessions_persistent(&mut loaded_config);
+    if migrated_mobile_access || migrated_persistent_sessions {
         if let Err(error) = config::save(&loaded_config) {
-            eprintln!("mobile: could not persist the safer per-device session migration: {error}");
+            eprintln!("mobile: could not persist the phone-session migration: {error}");
         }
     }
     let loaded_cache = config::load_usage_cache();

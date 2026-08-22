@@ -5,9 +5,10 @@
 - Added an opt-in, token-protected phone view with the desktop's accounts, quota bars, countdowns, privacy choices, and Refresh action.
 - Added a native Android 8+ companion with API-26-safe code, authenticated endpoint health probes, network-change failover, visible connection management, and automatic LAN/Tailscale pairing from one deep link.
 - Added an in-app desktop setup wizard with hot enable/disable, safe loopback-by-default listening, explicit LAN access, address discovery, QR pairing, Tailscale Serve setup, status diagnostics, and per-phone revocation.
-- Replaced the shared permanent token with hashed ten-minute pairing credentials and independent hashed 180-day device sessions; reverse-proxy cookies are path-scoped and forced refreshes are rate-limited.
+- Replaced the shared token with hashed ten-minute pairing credentials and independent, revocable phone sessions that do not require routine re-pairing; reverse-proxy cookies are path-scoped and forced refreshes are rate-limited.
 - Added signed Android APKs and checksums to tagged GitHub releases, a signed workflow preflight, certificate verification, pinned Actions, Gradle checksum verification, desktop HTTP integration tests, and API 26/current Android emulator smoke tests.
 - Added complete LAN, Tailscale Serve, updates, platform support, recovery, verification, troubleshooting, and security documentation.
+- Unified setup and usage into one release app with matching visuals, and matched the desktop behavior by coloring only the reset countdown.
 
 ## 0.2.7 — 2026-08-20
 

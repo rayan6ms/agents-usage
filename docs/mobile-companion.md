@@ -26,7 +26,7 @@ The official signing-certificate SHA-256 fingerprint is:
 c9a8159f30df08f5b5613ea0b438d4746c292f600aca3bc9ab48f5c5d7a540bf
 ```
 
-Debug builds have a different package ID and signing key and can coexist with the release app.
+GitHub releases contain one Android app. Developer-only debug builds use a separate package ID and are never attached to a release.
 
 ## 2. Pair from desktop settings
 
@@ -71,7 +71,7 @@ Removing an address locally does not revoke other sessions for that phone. To in
 
 - The server is disabled by default. New configurations bind to loopback after it is enabled; listening on the LAN requires the separate **Allow direct LAN** choice. Existing configurations that already used a LAN bind keep working after upgrade.
 - Pairing uses a random 256-bit token, stored as a SHA-256 hash on the desktop. It expires after ten minutes and has only enough redemptions for the addresses in that pairing bundle.
-- Each phone receives independent random sessions. Only session hashes are stored. Sessions expire after 180 days and can be revoked individually.
+- Each phone receives an independent random session. Only its hash is stored. It remains active until that phone is revoked or its app data is cleared, so routine re-pairing is unnecessary.
 - Cookies are HttpOnly, `SameSite=Strict`, and scoped to `/agents-usage/` behind the Tailscale path rather than the rest of that hostname. HTTPS cookies are marked Secure.
 - The server uses constant-time hash comparison and rate-limits forced Refresh requests.
 - Android rejects certificate errors and public cleartext hosts. File/content access, geolocation, mixed content, third-party cookies, cloud backup, and device-to-device backup are disabled.

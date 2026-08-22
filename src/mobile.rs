@@ -22,7 +22,9 @@ use tokio::sync::oneshot;
 
 const COOKIE_NAME: &str = "agents_usage_mobile";
 const PAIRING_TTL_SECONDS: i64 = 10 * 60;
-const SESSION_TTL_SECONDS: i64 = 180 * 24 * 60 * 60;
+// Android requires a finite Max-Age even though desktop-side sessions remain
+// active until explicitly revoked. Ten years avoids routine re-pairing.
+const SESSION_COOKIE_MAX_AGE_SECONDS: i64 = 10 * 365 * 24 * 60 * 60;
 const FORCE_REFRESH_COOLDOWN: Duration = Duration::from_secs(2);
 const REFERRER_POLICY: HeaderName = HeaderName::from_static("referrer-policy");
 const PERMISSIONS_POLICY: HeaderName = HeaderName::from_static("permissions-policy");
@@ -259,10 +261,10 @@ async fn pair(
             next_config.mobile.pairing = None;
         }
     }
-    next_config.mobile.devices.retain(|device| device.expires_at >= now);
+    next_config.mobile.devices.retain(|device| device_is_active(device, now));
     if let Some(device) = next_config.mobile.devices.iter_mut().find(|device| device.id == device_id) {
         device.additional_token_hashes.push(session_hash);
-        device.expires_at = now + SESSION_TTL_SECONDS;
+        device.expires_at = 0;
         device.last_seen_at = Some(now);
     } else {
         next_config.mobile.devices.push(MobileDevice {
@@ -271,7 +273,7 @@ async fn pair(
             token_hash: session_hash,
             additional_token_hashes: Vec::new(),
             created_at: now,
-            expires_at: now + SESSION_TTL_SECONDS,
+            expires_at: 0,
             last_seen_at: Some(now),
         });
     }
@@ -285,7 +287,7 @@ async fn pair(
     let cookie_path = normalized_cookie_path(query.path.as_deref());
     let secure = if forwarded_over_https(&headers) { "; Secure" } else { "" };
     let cookie = format!(
-        "{COOKIE_NAME}={session_token}; Path={cookie_path}; HttpOnly; SameSite=Strict; Max-Age={SESSION_TTL_SECONDS}{secure}"
+        "{COOKIE_NAME}={session_token}; Path={cookie_path}; HttpOnly; SameSite=Strict; Max-Age={SESSION_COOKIE_MAX_AGE_SECONDS}{secure}"
     );
     let Ok(cookie) = HeaderValue::from_str(&cookie) else {
         return (StatusCode::BAD_REQUEST, "The requested cookie path is invalid.").into_response();
@@ -474,7 +476,7 @@ fn authorized(headers: &HeaderMap, config: &Arc<Mutex<AppConfig>>) -> bool {
     let now = chrono::Utc::now().timestamp();
     let Ok(mut config) = config.lock() else { return false; };
     if let Some(device) = config.mobile.devices.iter_mut().find(|device| {
-            device.expires_at >= now
+            device_is_active(device, now)
                 && std::iter::once(&device.token_hash)
                     .chain(device.additional_token_hashes.iter())
                     .any(|expected| constant_time_eq(expected.as_bytes(), supplied_hash.as_bytes()))
@@ -511,10 +513,28 @@ pub fn migrate_legacy_access(config: &mut AppConfig) -> bool {
         token_hash: hash_token(&token),
         additional_token_hashes: Vec::new(),
         created_at: now,
-        expires_at: now + SESSION_TTL_SECONDS,
+        expires_at: 0,
         last_seen_at: None,
     });
     true
+}
+
+pub fn make_device_sessions_persistent(config: &mut AppConfig) -> bool {
+    let now = chrono::Utc::now().timestamp();
+    let previous_len = config.mobile.devices.len();
+    config.mobile.devices.retain(|device| device_is_active(device, now));
+    let mut changed = config.mobile.devices.len() != previous_len;
+    for device in &mut config.mobile.devices {
+        if device.expires_at != 0 {
+            device.expires_at = 0;
+            changed = true;
+        }
+    }
+    changed
+}
+
+pub fn device_is_active(device: &MobileDevice, now: i64) -> bool {
+    device.expires_at == 0 || device.expires_at >= now
 }
 
 pub fn revoke_device(config: &mut AppConfig, id: &str) -> bool {
@@ -621,8 +641,9 @@ fn static_response(
 #[cfg(test)]
 mod tests {
     use super::{
-        MobileServerState, constant_time_eq, create_pairing, forwarded_over_https,
-        migrate_legacy_access, normalized_cookie_path, parse_bind_address, router,
+        MobileServerState, constant_time_eq, create_pairing, device_is_active,
+        forwarded_over_https, make_device_sessions_persistent, migrate_legacy_access,
+        normalized_cookie_path, parse_bind_address, router,
     };
     use crate::WorkerCommand;
     use crate::config::AppConfig;
@@ -672,6 +693,43 @@ mod tests {
         assert!(config.mobile.access_token.is_none());
         assert_eq!(config.mobile.devices.len(), 1);
         assert!(!config.mobile.devices[0].token_hash.contains(&"a".repeat(32)));
+        assert_eq!(config.mobile.devices[0].expires_at, 0);
+    }
+
+    #[test]
+    fn existing_device_sessions_become_persistent_and_remain_active() {
+        let mut config = AppConfig::default();
+        let now = chrono::Utc::now().timestamp();
+        config.mobile.devices.push(crate::config::MobileDevice {
+            id: "phone".into(),
+            name: "Phone".into(),
+            token_hash: "hash".into(),
+            additional_token_hashes: Vec::new(),
+            created_at: now - 100,
+            expires_at: now + 100,
+            last_seen_at: None,
+        });
+        assert!(make_device_sessions_persistent(&mut config));
+        assert_eq!(config.mobile.devices[0].expires_at, 0);
+        assert!(device_is_active(&config.mobile.devices[0], now));
+        assert!(!make_device_sessions_persistent(&mut config));
+    }
+
+    #[test]
+    fn expired_device_sessions_are_not_revived() {
+        let mut config = AppConfig::default();
+        let now = chrono::Utc::now().timestamp();
+        config.mobile.devices.push(crate::config::MobileDevice {
+            id: "old-phone".into(),
+            name: "Old phone".into(),
+            token_hash: "hash".into(),
+            additional_token_hashes: Vec::new(),
+            created_at: now - 200,
+            expires_at: now - 100,
+            last_seen_at: None,
+        });
+        assert!(make_device_sessions_persistent(&mut config));
+        assert!(config.mobile.devices.is_empty());
     }
 
     #[tokio::test]

@@ -48,6 +48,10 @@ main = (root / 'src/main.rs').read_text()
 codex = (root / 'src/codex.rs').read_text()
 ui = (root / 'ui/app.slint').read_text()
 ext = (root / 'integration/gnome-shell/extension/extension.js').read_text()
+mobile_js = (root / 'mobile/app.js').read_text()
+mobile_css = (root / 'mobile/app.css').read_text()
+android_build = (root / 'mobile-android/app/build.gradle').read_text()
+release_workflow = (root / '.github/workflows/release.yml').read_text()
 
 assert 'account/rateLimits/read' in codex
 assert 'READ_ATTEMPTS: usize = 3' in codex
@@ -82,6 +86,12 @@ assert 'padding-top: 8px' in ui
 assert 'Personal' not in ui and 'team@anthropic.example' not in ui
 assert 'StatusNotifierTray' in main and 'create_native_tray' in main
 assert 'MoveFileExW' in (root / 'src/config.rs').read_text()
+assert '<span class="reset-text"> • resets in <span class="reset-timer ' in mobile_js
+assert '.reset-timer.colored' in mobile_css and '.reset-text.colored' not in mobile_css
+assert 'applicationId "io.github.agentsusagetray.companion"' in android_build
+assert 'applicationIdSuffix ".debug"' in android_build
+assert 'Agents-Usage-${version}-android.apk' in release_workflow
+assert not (root / 'tools/backup-android-signing-key.sh').exists()
 
 for rel in ['src/main.rs', 'src/codex.rs', 'ui/app.slint', 'integration/gnome-shell/extension/extension.js']:
     text = (root / rel).read_text()

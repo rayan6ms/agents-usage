@@ -69,7 +69,7 @@ function barColor(account, window, accountCount) {
 
 function limitHtml(account, window, isExpanded, accountCount) {
   const showReset = isExpanded && window.resets_at;
-  const reset = showReset ? `<span class="reset-text ${latestState.color_reset_timers ? "colored" : ""}" style="--timer-color:${timerColor(window, latestState.server_time)}">• resets in ${countdown(window.resets_at, latestState.server_time)}</span>` : "";
+  const reset = showReset ? `<span class="reset-text"> • resets in <span class="reset-timer ${latestState.color_reset_timers ? "colored" : ""}" style="--timer-color:${timerColor(window, latestState.server_time)}">${countdown(window.resets_at, latestState.server_time)}</span></span>` : "";
   return `<div class="limit"><span class="limit-label">${escapeHtml(windowLabel(window, false))}</span>${reset}<span class="bar"><span class="bar-fill" style="--remaining:${remaining(window)};--bar-color:${barColor(account, window, accountCount)}"></span></span><span class="percent">${percent(window)}</span></div>`;
 }
 

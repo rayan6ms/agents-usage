@@ -30,7 +30,7 @@ Open desktop **Settings → Phone companion** and turn it on. New installations 
 
 **Set up Tailscale** configures a private HTTPS path for access away from home. Tailscale must already be installed and signed into the same tailnet on both devices; an operating system may still request administrator approval. If explicitly enabled, direct LAN access uses TCP `3765`, so the desktop firewall may require one private-network approval. Never forward this port on a router and do not enable Tailscale Funnel.
 
-Each phone receives an independent six-month session and can be revoked from desktop settings without disconnecting other phones. Pairing links expire after ten minutes, are valid only for the addresses included in that pairing operation, and are removed from the phone after use. Android health-checks the saved routes, switches between LAN and Tailscale after network changes, and exposes a visible Connections button.
+Each phone receives an independent session that remains connected until it is revoked from desktop settings or its app data is cleared. Pairing links expire after ten minutes, are valid only for the addresses included in that pairing operation, and are removed from the phone after use. Android health-checks the saved routes, switches between LAN and Tailscale after network changes, and exposes a visible Connections button.
 
 Command-line controls remain available for recovery and scripted setups:
 
@@ -67,7 +67,7 @@ cd mobile-android
 ./gradlew --no-daemon test lintDebug assembleDebug
 ```
 
-Release APK signing is intentionally configured only through external environment variables; see [the release checklist](docs/releasing.md). The signing key and passwords must never be added to the repository.
+GitHub Actions signs release APKs automatically; see [the release checklist](docs/releasing.md). Android requires a stable signing certificate for updates, but maintainers do not handle an encrypted key backup as part of a release.
 
 ## License
 

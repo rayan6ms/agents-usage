@@ -7,8 +7,10 @@ import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
-import android.content.res.ColorStateList;
 import android.graphics.Color;
+import android.graphics.Insets;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.net.ConnectivityManager;
 import android.net.Network;
@@ -21,6 +23,7 @@ import android.window.OnBackInvokedDispatcher;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.WindowInsets;
 import android.view.inputmethod.InputMethodManager;
 import android.webkit.CookieManager;
 import android.webkit.SslErrorHandler;
@@ -33,6 +36,7 @@ import android.webkit.WebViewClient;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -57,12 +61,14 @@ public final class MainActivity extends Activity {
     private static final String PREFS = "connections";
     private static final String ENDPOINTS_KEY = "endpoint_bases";
     private static final String LAST_ENDPOINT_KEY = "last_endpoint";
-    private static final int BACKGROUND = Color.rgb(17, 19, 21);
-    private static final int SURFACE = Color.rgb(31, 34, 37);
+    private static final int BACKGROUND = Color.rgb(18, 19, 21);
+    private static final int SURFACE = Color.rgb(32, 33, 36);
+    private static final int CONTROL = Color.rgb(42, 44, 48);
+    private static final int BORDER = Color.rgb(67, 70, 75);
     private static final int PRIMARY = Color.rgb(39, 191, 206);
-    private static final int TEXT = Color.rgb(244, 247, 248);
-    private static final int MUTED = Color.rgb(174, 181, 184);
-    private static final int DANGER = Color.rgb(239, 100, 100);
+    private static final int TEXT = Color.rgb(243, 243, 243);
+    private static final int MUTED = Color.rgb(166, 168, 172);
+    private static final int DANGER = Color.rgb(255, 181, 191);
     private static final int HEALTH_TIMEOUT_MS = 3000;
     private static final long HEALTH_INTERVAL_MS = 15000;
 
@@ -228,35 +234,73 @@ public final class MainActivity extends Activity {
         root = new FrameLayout(this);
         root.setBackgroundColor(BACKGROUND);
         setContentView(root);
+        if (Build.VERSION.SDK_INT >= 35) {
+            root.setOnApplyWindowInsetsListener((view, windowInsets) -> {
+                Insets bars = windowInsets.getInsets(WindowInsets.Type.systemBars());
+                view.setPadding(bars.left, bars.top, bars.right, bars.bottom);
+                return WindowInsets.CONSUMED;
+            });
+            root.requestApplyInsets();
+        }
 
         webView = new WebView(this);
         webView.setBackgroundColor(BACKGROUND);
         root.addView(webView, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
+        LinearLayout shell = new LinearLayout(this);
+        shell.setOrientation(LinearLayout.VERTICAL);
+        shell.setBackground(roundedBackground(SURFACE, BORDER, 12));
+        shell.setClipToOutline(true);
+
+        LinearLayout header = new LinearLayout(this);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        header.setPadding(dp(12), 0, dp(12), 0);
+        shell.addView(header, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(52)));
+
+        ImageView icon = new ImageView(this);
+        icon.setImageResource(R.mipmap.ic_launcher);
+        icon.setContentDescription(null);
+        header.addView(icon, new LinearLayout.LayoutParams(dp(22), dp(22)));
+
+        TextView appTitle = text("Agents usage", 15, TEXT);
+        appTitle.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        LinearLayout.LayoutParams appTitleParams = new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1);
+        appTitleParams.setMargins(dp(9), 0, 0, 0);
+        header.addView(appTitle, appTitleParams);
+
+        View status = new View(this);
+        status.setBackground(circleBackground(Color.rgb(107, 112, 120)));
+        header.addView(status, new LinearLayout.LayoutParams(dp(7), dp(7)));
+
+        View divider = new View(this);
+        divider.setBackgroundColor(BORDER);
+        shell.addView(divider, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(1)));
+
         LinearLayout content = new LinearLayout(this);
         content.setOrientation(LinearLayout.VERTICAL);
-        content.setPadding(dp(24), dp(28), dp(24), dp(32));
+        content.setPadding(dp(16), dp(22), dp(16), dp(24));
+        shell.addView(content, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        TextView eyebrow = text("PHONE COMPANION", 12, PRIMARY);
-        eyebrow.setLetterSpacing(0.14f);
-        content.addView(eyebrow);
-
-        TextView title = text("Connect to your desktop", 28, TEXT);
-        title.setPadding(0, dp(9), 0, 0);
+        TextView title = text("Connect to your desktop", 23, TEXT);
+        title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         content.addView(title);
 
         TextView explanation = text(
                 "In desktop Settings, enable Phone companion and scan its QR code with your camera. "
                         + "If you copied the private link instead, paste it here. LAN and Tailscale can be paired together.",
-                15, MUTED);
+                14, MUTED);
         explanation.setLineSpacing(dp(3), 1.0f);
         explanation.setPadding(0, dp(12), 0, dp(18));
         content.addView(explanation);
 
         pairingInput = new EditText(this);
         pairingInput.setHint("https://desktop.example.ts.net/agents-usage/pair?token=…");
-        pairingInput.setHintTextColor(Color.rgb(120, 128, 132));
+        pairingInput.setHintTextColor(Color.rgb(128, 132, 138));
         pairingInput.setTextColor(TEXT);
         pairingInput.setTextSize(14);
         pairingInput.setSingleLine(false);
@@ -264,7 +308,7 @@ public final class MainActivity extends Activity {
         pairingInput.setMaxLines(4);
         pairingInput.setGravity(Gravity.TOP | Gravity.START);
         pairingInput.setPadding(dp(14), dp(12), dp(14), dp(12));
-        pairingInput.setBackgroundTintList(ColorStateList.valueOf(PRIMARY));
+        pairingInput.setBackground(roundedBackground(Color.rgb(25, 26, 29), BORDER, 8));
         content.addView(pairingInput, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
@@ -272,7 +316,7 @@ public final class MainActivity extends Activity {
         actions.setOrientation(LinearLayout.HORIZONTAL);
         actions.setGravity(Gravity.END);
         actions.setPadding(0, dp(10), 0, 0);
-        Button paste = button("Paste", SURFACE);
+        Button paste = button("Paste", CONTROL);
         paste.setOnClickListener(view -> pastePairingLink());
         actions.addView(paste);
         Button connect = button("Pair", PRIMARY);
@@ -283,8 +327,8 @@ public final class MainActivity extends Activity {
         connect.setOnClickListener(view -> beginPairing(pairingInput.getText().toString()));
         content.addView(actions);
 
-        noticeView = text("", 14, DANGER);
-        noticeView.setPadding(0, dp(12), 0, 0);
+        noticeView = text("", 13, DANGER);
+        noticeView.setPadding(dp(10), dp(9), dp(10), dp(9));
         noticeView.setVisibility(View.GONE);
         content.addView(noticeView);
 
@@ -298,14 +342,14 @@ public final class MainActivity extends Activity {
         content.addView(endpointList);
 
         TextView help = text(
-                "Pairing links expire after 10 minutes and are exchanged for protected desktop cookies. "
+                "The one-time link expires after 10 minutes. Once paired, this phone stays connected until you remove it. "
                         + "Use the Connections icon or Android Back to return here.",
                 13, MUTED);
         help.setLineSpacing(dp(2), 1.0f);
         help.setPadding(0, dp(24), 0, 0);
         content.addView(help);
 
-        Button updates = button("Check for app updates", SURFACE);
+        Button updates = button("Check for app updates", CONTROL);
         LinearLayout.LayoutParams updateParams = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         updateParams.setMargins(0, dp(16), 0, 0);
@@ -321,7 +365,10 @@ public final class MainActivity extends Activity {
         setupView = new ScrollView(this);
         setupView.setFillViewport(true);
         setupView.setBackgroundColor(BACKGROUND);
-        setupView.addView(content);
+        setupView.setClipToPadding(false);
+        setupView.setPadding(dp(10), dp(10), dp(10), dp(10));
+        setupView.addView(shell, new ScrollView.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         root.addView(setupView, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         renderEndpoints();
@@ -361,8 +408,9 @@ public final class MainActivity extends Activity {
         hideKeyboard();
         attemptedBases.clear();
         mainFrameFailed = false;
-        setupView.setVisibility(View.GONE);
-        webView.setVisibility(View.VISIBLE);
+        showNotice("Connecting to the desktop…", false);
+        setupView.setVisibility(View.VISIBLE);
+        webView.setVisibility(View.INVISIBLE);
         webView.loadUrl(pairingRequestUrl(pendingPairing.pairingUrl));
     }
 
@@ -373,6 +421,7 @@ public final class MainActivity extends Activity {
         }
         String preferred = preferences.getString(LAST_ENDPOINT_KEY, endpointBases.get(0));
         pendingPairing = null;
+        showNotice("Connecting to a saved desktop…", false);
         if (!endpointBases.contains(preferred)) preferred = endpointBases.get(0);
         List<String> candidates = new ArrayList<>();
         candidates.add(preferred);
@@ -489,6 +538,8 @@ public final class MainActivity extends Activity {
         } else {
             currentBase = baseUrl;
             attemptedBases.clear();
+            setupView.setVisibility(View.GONE);
+            webView.setVisibility(View.VISIBLE);
         }
     }
 
@@ -502,13 +553,22 @@ public final class MainActivity extends Activity {
         currentBase = null;
         connectionGeneration.incrementAndGet();
         healthCheckInProgress = false;
+        showNotice(message, true);
+        renderEndpoints();
+    }
+
+    private void showNotice(String message, boolean error) {
         if (message == null || message.trim().isEmpty()) {
             noticeView.setVisibility(View.GONE);
-        } else {
-            noticeView.setText(message);
-            noticeView.setVisibility(View.VISIBLE);
+            return;
         }
-        renderEndpoints();
+        noticeView.setText(message);
+        noticeView.setTextColor(error ? DANGER : PRIMARY);
+        noticeView.setBackground(roundedBackground(
+                error ? Color.rgb(50, 32, 37) : Color.rgb(25, 45, 48),
+                error ? Color.rgb(113, 64, 74) : Color.rgb(45, 91, 97),
+                7));
+        noticeView.setVisibility(View.VISIBLE);
     }
 
     private void renderEndpoints() {
@@ -523,7 +583,7 @@ public final class MainActivity extends Activity {
             LinearLayout row = new LinearLayout(this);
             row.setGravity(Gravity.CENTER_VERTICAL);
             row.setPadding(dp(12), dp(9), dp(6), dp(9));
-            row.setBackgroundColor(SURFACE);
+            row.setBackground(roundedBackground(CONTROL, BORDER, 8));
 
             LinearLayout labels = new LinearLayout(this);
             labels.setOrientation(LinearLayout.VERTICAL);
@@ -542,7 +602,7 @@ public final class MainActivity extends Activity {
                 probeAndLoad(candidate, "That desktop could not be reached.");
             });
             row.addView(use);
-            Button remove = button("Remove", SURFACE);
+            Button remove = button("Remove", CONTROL);
             remove.setTextColor(DANGER);
             remove.setOnClickListener(view -> removeEndpoint(base));
             row.addView(remove);
@@ -674,9 +734,27 @@ public final class MainActivity extends Activity {
         view.setAllCaps(false);
         view.setMinWidth(0);
         view.setMinimumWidth(0);
+        view.setMinHeight(dp(40));
+        view.setMinimumHeight(dp(40));
         view.setPadding(dp(12), 0, dp(12), 0);
-        view.setBackgroundTintList(ColorStateList.valueOf(background));
+        view.setElevation(0);
+        view.setBackground(roundedBackground(background, background == PRIMARY ? PRIMARY : BORDER, 8));
         return view;
+    }
+
+    private GradientDrawable roundedBackground(int fill, int stroke, int radius) {
+        GradientDrawable background = new GradientDrawable();
+        background.setColor(fill);
+        background.setCornerRadius(dp(radius));
+        background.setStroke(dp(1), stroke);
+        return background;
+    }
+
+    private GradientDrawable circleBackground(int fill) {
+        GradientDrawable background = new GradientDrawable();
+        background.setShape(GradientDrawable.OVAL);
+        background.setColor(fill);
+        return background;
     }
 
     private int dp(int value) {

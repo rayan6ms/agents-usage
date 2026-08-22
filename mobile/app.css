@@ -164,7 +164,7 @@ h1 {
 .limit { height: 23px; display: flex; align-items: center; gap: 7px; }
 .limit-label { color: #f3f3f3b3; font-size: 10.5px; white-space: nowrap; }
 .reset-text { color: #f3f3f3b3; font-size: 10.5px; white-space: nowrap; }
-.reset-text.colored { color: var(--timer-color); font-weight: 650; }
+.reset-timer.colored { color: var(--timer-color); font-weight: 650; }
 .bar { min-width: 28px; flex: 1; height: 6px; overflow: hidden; background: #303238; border: 1px solid #4a4d53; border-radius: 4px; }
 .bar-fill { display: block; width: calc(var(--remaining) * 100%); height: 100%; background: var(--bar-color); border-radius: 3px; transition: width .25s ease; }
 .percent { width: 36px; color: #f3f3f3; font-size: 11.5px; font-weight: 650; text-align: right; }
