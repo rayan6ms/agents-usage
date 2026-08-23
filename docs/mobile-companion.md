@@ -4,14 +4,14 @@ The phone companion is a read-only view of usage already collected by the deskto
 
 ## Requirements and supported configurations
 
-- Agents Usage 0.4.0 or newer, running in a logged-in desktop session.
+- Agents Usage 0.4.1 or newer, running in a logged-in desktop session for live updates.
 - Android 8.0/API 26 or newer with Android System WebView enabled.
 - For LAN: both devices on the same private network without guest/client isolation.
 - For remote access: Tailscale on both devices, signed into the same tailnet.
 
 Linux, Windows, and macOS builds contain the same companion server. Linux is exercised end-to-end on physical hardware; Windows and macOS are compiled and tested on native CI runners and have platform-specific guidance below. Android CI runs the companion on API 26 and a current API emulator. The browser/PWA view may work on iPhone and iPad over Tailscale HTTPS, but iOS remains an experimental, non-native support tier.
 
-The desktop must remain running and awake. Root, ADB, Termux, a USB cable, a cloud account, a public server, port forwarding, and Tailscale Funnel are not required or recommended.
+The desktop must remain running and awake for live updates and Refresh. After the phone has loaded version 0.4.1 successfully once, it can still display that last snapshot while the desktop is unavailable. Root, ADB, Termux, a USB cable, a cloud account, a public server, port forwarding, and Tailscale Funnel are not required or recommended.
 
 ## 1. Install and update Android
 
@@ -59,7 +59,9 @@ These prompts protect system or network boundaries and are intentionally not byp
 
 ## Connections and failover
 
-The Android app health-checks the current endpoint every 15 seconds and whenever Android reports a network change. It does not rely on a cached web page to decide whether the desktop is reachable. If LAN fails, it probes Tailscale; when LAN returns it continues using the current healthy route until a reconnect is needed.
+The Android app health-checks the current endpoint every 15 seconds and whenever Android reports a network change. Those live probes—not cached content—decide whether an endpoint is connected. If LAN fails, it probes Tailscale; when LAN returns it continues using the current healthy route until a reconnect is needed.
+
+After a successful load, the phone stores the last usage response locally. If every route is unavailable, it opens that read-only snapshot, labels it offline, and shows how old it is; quota-reset countdowns continue from the time the snapshot was saved. Connections remains available, and Back returns to the cached usage view. A successful live response replaces the snapshot. Removing an address clears its WebView storage, while an explicit server rejection clears the saved session and content so revoked access cannot be used to reopen account data.
 
 Tap the visible Connections icon in the usage header to manage addresses. The setup screen has a visible Back button, and Android Back has the same behavior:
 
@@ -138,6 +140,7 @@ agents-usage --mobile-disable
 **The view worked but became unavailable**
 
 - Wake the desktop and confirm Agents Usage is still running.
+- Press Back from Connections to return to the clearly marked last snapshot. A phone that has never loaded version 0.4.1 successfully has no snapshot yet.
 - Open Connections; the app will probe every saved route rather than trusting its cached page.
 - Check whether the desktop's DHCP address changed or Tailscale disconnected.
 

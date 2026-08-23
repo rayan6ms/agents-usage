@@ -169,10 +169,11 @@ dependencies = [
 
 [[package]]
 name = "agents-usage"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "aes-gcm",
  "axum",
+ "base64",
  "chrono",
  "copypasta",
  "http-body-util",

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.1 — 2026-08-23
+
+- Kept the Android companion's last successful usage snapshot available while every desktop route is offline, with an explicit age indicator, advancing reset countdowns, and working Back navigation from Connections.
+- Added breathing room above Android connection errors and cleared cached account data when an endpoint is removed or explicitly rejects a revoked session.
+- Added live Cursor Included/Auto/API bars with individual and team-plan fallbacks, plus Grok included-credit bars with provider-returned weekly or monthly periods.
+- Hardened provider compatibility for Claude's mixed core/scoped limits, Gemini's same-model token buckets, OpenCode field aliases, expired sessions, rate limits, and deterministic Grok credential selection.
+
 ## 0.4.0 — 2026-08-22
 
 - Added automatic discovery and live quota adapters for OpenCode Go, Anthropic Claude, and Google Gemini alongside OpenAI Codex.

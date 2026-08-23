@@ -4,6 +4,7 @@ use crate::discovery;
 use crate::domain::{RateWindow, UsageSnapshot};
 use aes_gcm::aead::Aead;
 use aes_gcm::{Aes256Gcm, AesGcm, KeyInit, Nonce};
+use base64::Engine;
 use chrono::DateTime;
 use reqwest::{Client, StatusCode};
 use serde_json::{Value, json};
@@ -26,6 +27,9 @@ const HTTP_TIMEOUT: Duration = Duration::from_secs(15);
 const CLAUDE_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const OPENCODE_GO_USAGE_URL: &str = "https://opencode.ai/zen/go/v1/usage";
 const GOOGLE_CODE_ASSIST_URL: &str = "https://cloudcode-pa.googleapis.com/v1internal";
+const CURSOR_USAGE_URL: &str = "https://cursor.com/api/usage-summary";
+const GROK_BILLING_URL: &str = "https://cli-chat-proxy.grok.com/v1/billing?format=credits";
+const GROK_SETTINGS_URL: &str = "https://cli-chat-proxy.grok.com/v1/settings";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProviderCandidate {
@@ -128,15 +132,17 @@ pub fn candidates(config: &AppConfig) -> Vec<ProviderCandidate> {
         }
 
         let cursor = home.join(".cursor");
-        if cursor.is_dir() && locate_user_executable(&["cursor-agent"], &home).is_some() {
+        if locate_user_executable(&["cursor-agent"], &home).is_some()
+            && (cursor_auth_path(&home).is_file() || cursor.is_dir())
+        {
             candidates.push(ProviderCandidate {
                 provider_id: CURSOR.into(),
                 home: cursor,
             });
         }
 
-        let grok = home.join(".grok");
-        if grok.join("auth.json").is_file() {
+        let grok = grok_home(&home);
+        if has_grok_token(&grok.join("auth.json")) {
             candidates.push(ProviderCandidate {
                 provider_id: XAI.into(),
                 home: grok,
@@ -177,8 +183,11 @@ pub fn is_marked(provider_id: &str, home: &Path) -> bool {
                 || home.join("gemini-credentials.json").is_file()
                 || home.join("google_accounts.json").is_file()
         }
-        CURSOR => home.is_dir(),
-        XAI => home.join("auth.json").is_file(),
+        CURSOR => {
+            let user_home = home.parent().unwrap_or(home);
+            cursor_auth_path(user_home).is_file() || home.is_dir()
+        }
+        XAI => has_grok_token(&home.join("auth.json")),
         _ => false,
     }
 }
@@ -234,8 +243,32 @@ fn has_opencode_go_key(path: &Path) -> bool {
 fn opencode_data_dir(home: &Path) -> PathBuf {
     std::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
         .unwrap_or_else(|| home.join(".local").join("share"))
         .join("opencode")
+}
+
+fn cursor_auth_path(home: &Path) -> PathBuf {
+    std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .unwrap_or_else(|| home.join(".config"))
+        .join("cursor")
+        .join("auth.json")
+}
+
+fn grok_home(home: &Path) -> PathBuf {
+    std::env::var_os("GROK_HOME")
+        .map(PathBuf::from)
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| home.join(".grok"))
+}
+
+fn has_grok_token(path: &Path) -> bool {
+    read_json(path, "Grok")
+        .ok()
+        .and_then(|value| select_grok_credential(&value))
+        .is_some()
 }
 
 fn read_opencode_auth(path: &Path) -> Result<Value, ProviderError> {
@@ -314,11 +347,38 @@ fn normalize_opencode_usage(value: &Value, now: i64) -> Vec<RateWindow> {
         let Some(window) = value.get(key) else {
             continue;
         };
-        let Some(used_percent) = number(window.get("usagePercent")) else {
+        let Some(used_percent) = first_number(
+            window,
+            &[
+                "usagePercent",
+                "usedPercent",
+                "percentUsed",
+                "percent",
+                "usage_percent",
+                "used_percent",
+                "utilization",
+                "utilizationPercent",
+            ],
+        ) else {
             continue;
         };
-        let resets_at =
-            number(window.get("resetInSec")).map(|seconds| now + seconds.max(0.0) as i64);
+        let resets_at = first_number(
+            window,
+            &[
+                "resetInSec",
+                "resetInSeconds",
+                "resetSeconds",
+                "reset_in_sec",
+                "resetsInSec",
+                "resetIn",
+            ],
+        )
+        .map(|seconds| now + seconds.max(0.0) as i64)
+        .or_else(|| {
+            ["resetAt", "resetsAt", "reset_at", "resets_at", "nextReset"]
+                .into_iter()
+                .find_map(|key| timestamp(window.get(key)))
+        });
         windows.push(RateWindow {
             label: Some(label.into()),
             used_percent: (used_percent as f32).clamp(0.0, 100.0),
@@ -442,13 +502,7 @@ fn claude_email(home: &Path) -> Option<String> {
 
 fn normalize_claude_usage(value: &Value) -> Vec<RateWindow> {
     let mut rows = Vec::new();
-    let entries: Vec<(String, &Value)> = if let Some(array) = value.as_array() {
-        array
-            .iter()
-            .enumerate()
-            .map(|(index, item)| (index.to_string(), item))
-            .collect()
-    } else if let Some(array) = value.get("limits").and_then(Value::as_array) {
+    let mut entries: Vec<(String, &Value)> = if let Some(array) = value.as_array() {
         array
             .iter()
             .enumerate()
@@ -458,9 +512,24 @@ fn normalize_claude_usage(value: &Value) -> Vec<RateWindow> {
         value
             .as_object()
             .into_iter()
-            .flat_map(|object| object.iter().map(|(key, item)| (key.clone(), item)))
+            .flat_map(|object| {
+                object
+                    .iter()
+                    .filter(|(key, _)| key.as_str() != "limits")
+                    .map(|(key, item)| (key.clone(), item))
+            })
             .collect()
     };
+    if !value.is_array()
+        && let Some(limits) = value.get("limits").and_then(Value::as_array)
+    {
+        entries.extend(
+            limits
+                .iter()
+                .enumerate()
+                .map(|(index, item)| (format!("limit-{index}"), item)),
+        );
+    }
     for (key, item) in entries {
         let kind = item.get("kind").and_then(Value::as_str).unwrap_or(&key);
         if matches!(kind, "extra_usage" | "seven_day_overage_included") || !item.is_object() {
@@ -476,13 +545,25 @@ fn normalize_claude_usage(value: &Value) -> Vec<RateWindow> {
             .pointer("/scope/model/display_name")
             .and_then(Value::as_str);
         let label = scope
-            .map(|name| format!("Weekly · {name}"))
+            .map(|name| {
+                if name.eq_ignore_ascii_case("weekly")
+                    || name.eq_ignore_ascii_case("all models")
+                {
+                    "Weekly".into()
+                } else {
+                    format!("Weekly · {name}")
+                }
+            })
             .unwrap_or_else(|| match kind {
                 "five_hour" | "session" => "5-hour".into(),
                 "seven_day" | "weekly_all" => "Weekly".into(),
                 "seven_day_opus" => "Weekly · Opus".into(),
                 "seven_day_sonnet" => "Weekly · Sonnet".into(),
                 "weekly_scoped" => "Weekly · model".into(),
+                other if other.starts_with("seven_day_") => format!(
+                    "Weekly · {}",
+                    title_case(other.trim_start_matches("seven_day_"))
+                ),
                 other => title_case(other),
             });
         let duration_mins = match kind {
@@ -490,12 +571,15 @@ fn normalize_claude_usage(value: &Value) -> Vec<RateWindow> {
             value if value.starts_with("seven_day") || value.starts_with("weekly") => Some(10_080),
             _ => None,
         };
-        rows.push(RateWindow {
+        let row = RateWindow {
             label: Some(label),
             used_percent: (used_percent as f32).clamp(0.0, 100.0),
             duration_mins,
             resets_at: timestamp(item.get("resets_at")),
-        });
+        };
+        if !rows.iter().any(|existing: &RateWindow| existing.label == row.label) {
+            rows.push(row);
+        }
     }
     rows
 }
@@ -774,13 +858,24 @@ fn normalize_gemini_quota(quota: &Value) -> Vec<RateWindow> {
         .flatten()
         .filter_map(|bucket| {
             let remaining = number(bucket.get("remainingFraction"))?;
-            let model = bucket
-                .get("modelId")
-                .and_then(Value::as_str)
-                .or_else(|| bucket.get("tokenType").and_then(Value::as_str))
-                .unwrap_or("Gemini");
+            let model = bucket.get("modelId").and_then(Value::as_str);
+            let token_type = bucket.get("tokenType").and_then(Value::as_str);
+            let label = match (model, token_type) {
+                (Some(model), Some(token_type))
+                    if !token_type.is_empty() && token_type != model =>
+                {
+                    format!(
+                        "{} · {}",
+                        pretty_model_name(model),
+                        pretty_model_name(token_type)
+                    )
+                }
+                (Some(model), _) => pretty_model_name(model),
+                (_, Some(token_type)) => pretty_model_name(token_type),
+                _ => "Gemini".into(),
+            };
             Some(RateWindow {
-                label: Some(pretty_model_name(model)),
+                label: Some(label),
                 used_percent: ((1.0 - remaining).clamp(0.0, 1.0) * 100.0) as f32,
                 duration_mins: None,
                 resets_at: timestamp(bucket.get("resetTime")),
@@ -788,7 +883,6 @@ fn normalize_gemini_quota(quota: &Value) -> Vec<RateWindow> {
         })
         .collect::<Vec<_>>();
     windows.sort_by(|left, right| left.label.cmp(&right.label));
-    windows.dedup_by(|left, right| left.label == right.label);
     windows
 }
 
@@ -896,60 +990,290 @@ async fn read_cursor(home: &Path) -> Result<ProviderReading, ProviderError> {
         discovery::user_home().unwrap_or_else(|| home.parent().unwrap_or(home).to_path_buf());
     let executable = locate_user_executable(&["cursor-agent"], &user_home)
         .ok_or_else(|| ProviderError::Message("Cursor Agent CLI was not found".into()))?;
-    let mut command = Command::new(executable);
-    command
-        .arg("status")
-        .stdin(Stdio::null())
-        .stderr(Stdio::piped())
-        .stdout(Stdio::piped())
-        .kill_on_drop(true);
-    let output = tokio::time::timeout(Duration::from_secs(8), command.output())
-        .await
-        .map_err(|_| ProviderError::Message("Cursor authentication status timed out".into()))?
-        .map_err(|_| {
-            ProviderError::Message("Cursor authentication status could not be checked".into())
+    let auth = read_json(&cursor_auth_path(&user_home), "Cursor")?;
+    let access_token = auth
+        .get("accessToken")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            ProviderError::Message(
+                "Cursor sign-in has no usable session; run `cursor-agent login`".into(),
+            )
         })?;
-    let text = format!(
-        "{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    if !output.status.success() || text.to_ascii_lowercase().contains("not authenticated") {
+    let claims = decode_jwt_claims(access_token).ok_or_else(|| {
+        ProviderError::Message("Cursor session has an unsupported token format".into())
+    })?;
+    if claims
+        .get("exp")
+        .and_then(Value::as_i64)
+        .is_some_and(|expiry| expiry <= chrono::Utc::now().timestamp())
+    {
         return Err(ProviderError::Message(
-            "Sign in with `cursor-agent login` first".into(),
+            "Cursor sign-in expired; run `cursor-agent login`".into(),
         ));
     }
-    let email = text
-        .split_whitespace()
-        .find(|value| value.contains('@') && value.contains('.'))
-        .map(|value| {
-            value
-                .trim_matches(|character: char| {
-                    !character.is_ascii_alphanumeric()
-                        && !matches!(character, '@' | '.' | '_' | '-' | '+')
-                })
-                .to_string()
-        });
+    let subject = claims
+        .get("sub")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            ProviderError::Message("Cursor session contains no account identity".into())
+        })?;
+    let user_id = subject.rsplit('|').next().unwrap_or(subject);
+    let cookie = format!("WorkosCursorSessionToken={user_id}%3A%3A{access_token}");
+    let version = cli_version(&executable, "2026.07.07").await;
+    let client = http_client("Cursor")?;
+    let response = client
+        .get(CURSOR_USAGE_URL)
+        .header(reqwest::header::COOKIE, cookie)
+        .header(reqwest::header::ACCEPT, "application/json")
+        .header(
+            reqwest::header::USER_AGENT,
+            format!("cursor-agent/{version}"),
+        )
+        .send()
+        .await
+        .map_err(|source| ProviderError::Request {
+            provider: "Cursor",
+            source,
+        })?;
+    if response.status() == StatusCode::UNAUTHORIZED || response.status() == StatusCode::FORBIDDEN {
+        return Err(ProviderError::Message(
+            "Cursor sign-in expired; run `cursor-agent login`".into(),
+        ));
+    }
+    if response.status() == StatusCode::TOO_MANY_REQUESTS {
+        return Err(ProviderError::Message(
+            "Cursor temporarily limited usage checks; showing the last update".into(),
+        ));
+    }
+    let value: Value = response
+        .error_for_status()
+        .map_err(|source| ProviderError::Request {
+            provider: "Cursor",
+            source,
+        })?
+        .json()
+        .await
+        .map_err(|source| ProviderError::Request {
+            provider: "Cursor",
+            source,
+        })?;
+    let windows = normalize_cursor_usage(&value);
+    if windows.is_empty() {
+        return Err(ProviderError::Message(
+            "Cursor returned no usable plan quota".into(),
+        ));
+    }
+    let email = claims
+        .get("email")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let bucket_name = value
+        .get("membershipType")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(|plan| format!("Cursor · {}", title_case(plan)))
+        .unwrap_or_else(|| "Cursor".into());
     Ok(ProviderReading {
-        snapshot: snapshot(email, Some("Cursor"), Vec::new()),
-        notice: Some(
-            "Cursor does not expose individual plan usage through its CLI or a public API yet"
-                .into(),
-        ),
+        snapshot: snapshot(email, Some(&bucket_name), windows),
+        notice: None,
     })
 }
 
-async fn read_grok(home: &Path) -> Result<ProviderReading, ProviderError> {
-    let auth = read_json(&home.join("auth.json"), "Grok")?;
-    if auth.as_object().is_none_or(|object| object.is_empty()) {
-        return Err(ProviderError::Message(
-            "Sign in with `grok login` first".into(),
-        ));
+fn decode_jwt_claims(token: &str) -> Option<Value> {
+    let payload = token.split('.').nth(1)?.trim_end_matches('=');
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload)
+        .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(payload))
+        .ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+fn normalize_cursor_usage(value: &Value) -> Vec<RateWindow> {
+    let resets_at = timestamp(value.get("billingCycleEnd"));
+    let duration_mins = match (timestamp(value.get("billingCycleStart")), resets_at) {
+        (Some(start), Some(end)) if end > start => Some(((end - start) / 60) as u64),
+        _ => None,
+    };
+    let make_window = |label: &str, used_percent: f64| RateWindow {
+        label: Some(label.into()),
+        used_percent: (used_percent as f32).clamp(0.0, 100.0),
+        duration_mins,
+        resets_at,
+    };
+    let mut windows = Vec::new();
+    let plan = value.pointer("/individualUsage/plan");
+    let auto = plan.and_then(|plan| number(plan.get("autoPercentUsed")));
+    let api = plan.and_then(|plan| number(plan.get("apiPercentUsed")));
+    if let Some(percent) = auto {
+        windows.push(make_window("Auto usage", percent));
     }
+    if let Some(percent) = api {
+        windows.push(make_window("API usage", percent));
+    }
+    let personal = value
+        .pointer("/individualUsage/overall")
+        .and_then(used_ratio);
+    let pooled = value.pointer("/teamUsage/pooled").and_then(used_ratio);
+    let team_limited = value
+        .get("limitType")
+        .and_then(Value::as_str)
+        .is_some_and(|kind| kind.eq_ignore_ascii_case("team"));
+    let primary = if team_limited {
+        pooled.map(|percent| ("Team pool", percent))
+    } else {
+        plan.and_then(|plan| {
+            number(plan.get("totalPercentUsed"))
+                .or_else(|| used_ratio(plan))
+                .map(|percent| ("Included usage", percent))
+        })
+        .or_else(|| personal.map(|percent| ("Personal cap", percent)))
+        .or_else(|| pooled.map(|percent| ("Team pool", percent)))
+    };
+    if let Some((label, percent)) = primary {
+        // Appending the aggregate last makes it the compact row when every
+        // Cursor lane shares the same billing-cycle duration.
+        windows.push(make_window(label, percent));
+    }
+    windows
+}
+
+fn used_ratio(value: &Value) -> Option<f64> {
+    if value.get("enabled").and_then(Value::as_bool) == Some(false) {
+        return None;
+    }
+    let limit = number(value.get("limit"))?;
+    if limit <= 0.0 {
+        return None;
+    }
+    let used = number(value.get("used"))
+        .filter(|used| *used > 0.0)
+        .or_else(|| number(value.get("remaining")).map(|remaining| limit - remaining))
+        .or_else(|| number(value.get("used")))?;
+    Some(used.max(0.0) / limit * 100.0)
+}
+
+async fn read_grok(home: &Path) -> Result<ProviderReading, ProviderError> {
     let user_home =
         discovery::user_home().unwrap_or_else(|| home.parent().unwrap_or(home).to_path_buf());
     let executable = locate_user_executable(&["grok"], &user_home)
         .ok_or_else(|| ProviderError::Message("Grok CLI was not found on PATH".into()))?;
+    let auth_path = home.join("auth.json");
+    let auth = read_json(&auth_path, "Grok")?;
+    let mut credential = select_grok_credential(&auth)
+        .ok_or_else(|| ProviderError::Message("Sign in with `grok login` first".into()))?;
+    if credential
+        .expires_at
+        .is_some_and(|expiry| expiry <= chrono::Utc::now().timestamp())
+    {
+        refresh_grok_with_cli(&executable, home).await?;
+        credential = select_grok_credential(&read_json(&auth_path, "Grok")?)
+            .ok_or_else(|| ProviderError::Message("Sign in with `grok login` first".into()))?;
+        if credential
+            .expires_at
+            .is_some_and(|expiry| expiry <= chrono::Utc::now().timestamp())
+        {
+            return Err(ProviderError::Message(
+                "Grok sign-in expired; run `grok login`".into(),
+            ));
+        }
+    }
+    let version = cli_version(&executable, "0.2.112").await;
+    let user_agent = format!(
+        "grok-pager/{version} grok-shell/{version} ({}; {})",
+        std::env::consts::OS,
+        std::env::consts::ARCH
+    );
+    let client = http_client("Grok")?;
+    let mut response = grok_get(
+        &client,
+        &credential,
+        GROK_BILLING_URL,
+        &version,
+        &user_agent,
+    )
+    .await?;
+    if response.status() == StatusCode::UNAUTHORIZED || response.status() == StatusCode::FORBIDDEN {
+        refresh_grok_with_cli(&executable, home).await?;
+        credential = select_grok_credential(&read_json(&auth_path, "Grok")?)
+            .ok_or_else(|| ProviderError::Message("Sign in with `grok login` first".into()))?;
+        response = grok_get(
+            &client,
+            &credential,
+            GROK_BILLING_URL,
+            &version,
+            &user_agent,
+        )
+        .await?;
+        if response.status() == StatusCode::UNAUTHORIZED
+            || response.status() == StatusCode::FORBIDDEN
+        {
+            return Err(ProviderError::Message(
+                "Grok sign-in expired; run `grok login`".into(),
+            ));
+        }
+    }
+    if response.status() == StatusCode::TOO_MANY_REQUESTS {
+        return Err(ProviderError::Message(
+            "Grok temporarily limited usage checks; showing the last update".into(),
+        ));
+    }
+    let value: Value = response
+        .error_for_status()
+        .map_err(|source| ProviderError::Request {
+            provider: "Grok",
+            source,
+        })?
+        .json()
+        .await
+        .map_err(|source| ProviderError::Request {
+            provider: "Grok",
+            source,
+        })?;
+    let windows = normalize_grok_usage(&value);
+    if windows.is_empty() {
+        return Err(ProviderError::Message(
+            "Grok returned no usable included-credit quota".into(),
+        ));
+    }
+    let plan = match grok_get(
+        &client,
+        &credential,
+        GROK_SETTINGS_URL,
+        &version,
+        &user_agent,
+    )
+    .await
+    {
+        Ok(response) if response.status().is_success() => {
+            response.json::<Value>().await.ok().and_then(|value| {
+                value
+                    .get("subscription_tier_display")
+                    .or_else(|| value.get("subscriptionTierDisplay"))
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.trim().is_empty())
+                    .map(str::to_string)
+            })
+        }
+        _ => None,
+    };
+    let bucket_name = plan.unwrap_or_else(|| "Grok".into());
+    Ok(ProviderReading {
+        snapshot: snapshot(credential.email, Some(&bucket_name), windows),
+        notice: None,
+    })
+}
+
+#[derive(Debug)]
+struct GrokCredential {
+    access_token: String,
+    user_id: Option<String>,
+    email: Option<String>,
+    expires_at: Option<i64>,
+}
+
+async fn refresh_grok_with_cli(executable: &Path, home: &Path) -> Result<(), ProviderError> {
     let mut command = Command::new(executable);
     command
         .arg("models")
@@ -958,26 +1282,164 @@ async fn read_grok(home: &Path) -> Result<ProviderReading, ProviderError> {
         .stderr(Stdio::piped())
         .stdout(Stdio::null())
         .kill_on_drop(true);
-    let output = tokio::time::timeout(Duration::from_secs(8), command.output())
+    let output = tokio::time::timeout(Duration::from_secs(12), command.output())
         .await
-        .map_err(|_| ProviderError::Message("Grok authentication check timed out".into()))?
-        .map_err(|_| ProviderError::Message("Grok authentication could not be checked".into()))?;
-    if !output.status.success() {
-        let message = String::from_utf8_lossy(&output.stderr).to_ascii_lowercase();
-        if message.contains("auth") || message.contains("login") || message.contains("unauthorized")
-        {
-            return Err(ProviderError::Message(
-                "Grok sign-in expired; run `grok login`".into(),
-            ));
-        }
-        return Err(ProviderError::Message(
-            "Grok could not validate the current sign-in".into(),
-        ));
+        .map_err(|_| ProviderError::Message("Grok authentication refresh timed out".into()))?
+        .map_err(|_| ProviderError::Message("Grok authentication could not be refreshed".into()))?;
+    if output.status.success() {
+        return Ok(());
     }
-    Ok(ProviderReading {
-        snapshot: snapshot(None, Some("Grok"), Vec::new()),
-        notice: Some("Grok currently exposes the weekly usage pool only in Settings, not through Grok Build or a public API".into()),
-    })
+    let message = String::from_utf8_lossy(&output.stderr).to_ascii_lowercase();
+    if message.contains("auth") || message.contains("login") || message.contains("unauthorized") {
+        Err(ProviderError::Message(
+            "Grok sign-in expired; run `grok login`".into(),
+        ))
+    } else {
+        Err(ProviderError::Message(
+            "Grok could not refresh the current sign-in".into(),
+        ))
+    }
+}
+
+async fn grok_get(
+    client: &Client,
+    credential: &GrokCredential,
+    url: &'static str,
+    version: &str,
+    user_agent: &str,
+) -> Result<reqwest::Response, ProviderError> {
+    let mut request = client
+        .get(url)
+        .bearer_auth(&credential.access_token)
+        .header(reqwest::header::ACCEPT, "application/json")
+        .header(reqwest::header::USER_AGENT, user_agent)
+        .header("x-xai-token-auth", "xai-grok-cli")
+        .header("x-grok-client-version", version)
+        .header("x-grok-client-mode", "interactive");
+    if let Some(user_id) = credential.user_id.as_deref() {
+        request = request.header("x-userid", user_id);
+    }
+    request
+        .send()
+        .await
+        .map_err(|source| ProviderError::Request {
+            provider: "Grok",
+            source,
+        })
+}
+
+fn select_grok_credential(auth: &Value) -> Option<GrokCredential> {
+    auth.as_object()?
+        .iter()
+        .filter_map(|(entry_key, entry)| {
+            let access_token = entry
+                .get("key")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())?
+                .to_string();
+            let refreshable = entry
+                .get("refresh_token")
+                .and_then(Value::as_str)
+                .is_some_and(|value| !value.is_empty())
+                && entry_key.starts_with("http");
+            let expires_at = timestamp(entry.get("expires_at"));
+            Some((
+                refreshable,
+                expires_at.unwrap_or_default(),
+                entry_key,
+                GrokCredential {
+                    access_token,
+                    user_id: entry
+                        .get("user_id")
+                        .and_then(Value::as_str)
+                        .filter(|value| !value.is_empty())
+                        .map(str::to_string),
+                    email: entry
+                        .get("email")
+                        .and_then(Value::as_str)
+                        .filter(|value| !value.is_empty())
+                        .map(str::to_string),
+                    expires_at,
+                },
+            ))
+        })
+        .max_by(|left, right| {
+            left.0
+                .cmp(&right.0)
+                .then(left.1.cmp(&right.1))
+                .then_with(|| right.2.cmp(left.2))
+        })
+        .map(|(_, _, _, credential)| credential)
+}
+
+fn normalize_grok_usage(value: &Value) -> Vec<RateWindow> {
+    let Some(config) = value.get("config").filter(|value| value.is_object()) else {
+        return Vec::new();
+    };
+    let period = config.get("currentPeriod");
+    // The billing response is proto3 JSON: an omitted/null scalar is its real
+    // zero default. On-demand spend is a separate paid feature and must never
+    // be repurposed as the included-credit percentage.
+    let used_percent = number(config.get("creditUsagePercent")).unwrap_or(0.0);
+    let start = period
+        .and_then(|period| timestamp(period.get("start")))
+        .or_else(|| timestamp(config.get("billingPeriodStart")));
+    let resets_at = period
+        .and_then(|period| timestamp(period.get("end")))
+        .or_else(|| timestamp(config.get("billingPeriodEnd")));
+    let duration_mins = match (start, resets_at) {
+        (Some(start), Some(end)) if end > start => Some(((end - start) / 60) as u64),
+        _ => None,
+    };
+    let period_type = period
+        .and_then(|period| period.get("type"))
+        .and_then(Value::as_str);
+    let label = match period_type {
+        Some("USAGE_PERIOD_TYPE_WEEKLY") => "Weekly",
+        Some("USAGE_PERIOD_TYPE_MONTHLY") => "Monthly",
+        _ if duration_mins.is_some_and(|minutes| (4 * 1_440..=12 * 1_440).contains(&minutes)) => {
+            "Weekly"
+        }
+        _ if duration_mins.is_some_and(|minutes| (20 * 1_440..=45 * 1_440).contains(&minutes)) => {
+            "Monthly"
+        }
+        _ => "Included credits",
+    };
+    vec![RateWindow {
+        label: Some(label.into()),
+        used_percent: (used_percent as f32).clamp(0.0, 100.0),
+        duration_mins,
+        resets_at,
+    }]
+}
+
+async fn cli_version(executable: &Path, fallback: &str) -> String {
+    let mut command = Command::new(executable);
+    command
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .stdout(Stdio::piped())
+        .kill_on_drop(true);
+    tokio::time::timeout(Duration::from_secs(3), command.output())
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .and_then(|output| {
+            output
+                .split_whitespace()
+                .find(|part| part.bytes().any(|byte| byte.is_ascii_digit()))
+                .map(|part| {
+                    part.trim_matches(|character: char| {
+                        !character.is_ascii_alphanumeric() && character != '.' && character != '-'
+                    })
+                    .to_string()
+                })
+        })
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| fallback.into())
 }
 
 fn snapshot(
@@ -996,6 +1458,10 @@ fn snapshot(
 
 fn number(value: Option<&Value>) -> Option<f64> {
     value.and_then(|value| value.as_f64().or_else(|| value.as_str()?.parse().ok()))
+}
+
+fn first_number(value: &Value, keys: &[&str]) -> Option<f64> {
+    keys.iter().find_map(|key| number(value.get(*key)))
 }
 
 fn timestamp(value: Option<&Value>) -> Option<i64> {
@@ -1090,11 +1556,13 @@ fn executable_name(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        decrypt_gemini_credentials, normalize_claude_usage, normalize_gemini_quota,
-        normalize_opencode_usage, timestamp,
+        decode_jwt_claims, decrypt_gemini_credentials, normalize_claude_usage,
+        normalize_cursor_usage, normalize_gemini_quota, normalize_grok_usage,
+        normalize_opencode_usage, select_grok_credential, timestamp,
     };
     use aes_gcm::aead::Aead;
     use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
+    use base64::Engine;
     use serde_json::json;
 
     #[test]
@@ -1119,6 +1587,23 @@ mod tests {
         ]));
         assert_eq!(windows.len(), 2);
         assert_eq!(windows[1].label.as_deref(), Some("Weekly · Opus"));
+    }
+
+    #[test]
+    fn claude_flat_and_scoped_limits_are_merged_without_duplicate_core_windows() {
+        let windows = normalize_claude_usage(&json!({
+            "five_hour": {"utilization": 11, "resets_at": "2026-08-23T12:00:00Z"},
+            "seven_day": {"utilization": 9, "resets_at": "2026-08-29T12:00:00Z"},
+            "limits": [
+                {"kind": "session", "percent": 11, "resets_at": "2026-08-23T12:00:00Z"},
+                {"kind": "weekly_all", "percent": 9, "resets_at": "2026-08-29T12:00:00Z"},
+                {"kind": "weekly_scoped", "percent": 5, "scope": {"model": {"display_name": "Fable"}}}
+            ]
+        }));
+        assert_eq!(windows.len(), 3);
+        assert_eq!(windows[0].label.as_deref(), Some("5-hour"));
+        assert_eq!(windows[1].label.as_deref(), Some("Weekly"));
+        assert_eq!(windows[2].label.as_deref(), Some("Weekly · Fable"));
     }
 
     #[test]
@@ -1151,6 +1636,21 @@ mod tests {
     }
 
     #[test]
+    fn opencode_go_accepts_compatible_percent_and_reset_fields() {
+        let windows = normalize_opencode_usage(
+            &json!({
+                "rollingUsage": {"usedPercent": "12.5", "resetInSeconds": "60"},
+                "weeklyUsage": {"utilizationPercent": 33, "resetsAt": "2026-08-24T12:00:00Z"}
+            }),
+            1_700_000_000,
+        );
+        assert_eq!(windows.len(), 2);
+        assert_eq!(windows[0].used_percent, 12.5);
+        assert_eq!(windows[0].resets_at, Some(1_700_000_060));
+        assert!(windows[1].resets_at.is_some());
+    }
+
+    #[test]
     fn gemini_quota_buckets_become_model_specific_windows() {
         let windows = normalize_gemini_quota(&json!({"buckets": [
             {"modelId": "models/gemini-2.5-pro", "remainingFraction": 0.8, "resetTime": "2026-08-23T12:00:00Z"},
@@ -1160,6 +1660,118 @@ mod tests {
         assert_eq!(windows[0].label.as_deref(), Some("Gemini 2.5 Flash"));
         assert_eq!(windows[0].used_percent, 75.0);
         assert_eq!(windows[1].label.as_deref(), Some("Gemini 2.5 Pro"));
+    }
+
+    #[test]
+    fn gemini_preserves_distinct_buckets_for_the_same_model() {
+        let windows = normalize_gemini_quota(&json!({"buckets": [
+            {"modelId": "models/gemini-pro", "tokenType": "requests", "remainingFraction": 0.8},
+            {"modelId": "models/gemini-pro", "tokenType": "tokens", "remainingFraction": 0.5}
+        ]}));
+        assert_eq!(windows.len(), 2);
+        assert_eq!(windows[0].label.as_deref(), Some("Gemini Pro · Requests"));
+        assert_eq!(windows[1].label.as_deref(), Some("Gemini Pro · Tokens"));
+    }
+
+    #[test]
+    fn cursor_session_and_plan_windows_match_current_cli_formats() {
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(br#"{"sub":"github|user_123","email":"person@example.com","exp":9999999999}"#);
+        let token = format!("header.{payload}.signature");
+        let claims = decode_jwt_claims(&token).unwrap();
+        assert_eq!(
+            claims.get("sub").and_then(serde_json::Value::as_str),
+            Some("github|user_123")
+        );
+
+        let windows = normalize_cursor_usage(&json!({
+            "billingCycleStart": "2026-08-01T00:00:00Z",
+            "billingCycleEnd": "2026-09-01T00:00:00Z",
+            "individualUsage": {"plan": {
+                "autoPercentUsed": 12.5,
+                "apiPercentUsed": 40,
+                "totalPercentUsed": 25
+            }}
+        }));
+        assert_eq!(windows.len(), 3);
+        assert_eq!(windows[0].label.as_deref(), Some("Auto usage"));
+        assert_eq!(windows[2].label.as_deref(), Some("Included usage"));
+        assert_eq!(windows[2].used_percent, 25.0);
+        assert_eq!(windows[2].duration_mins, Some(44_640));
+    }
+
+    #[test]
+    fn cursor_team_accounts_fall_back_to_real_pool_ratios() {
+        let personal = normalize_cursor_usage(&json!({
+            "individualUsage": {"overall": {"used": 0, "limit": 10000, "remaining": 7500}}
+        }));
+        assert_eq!(personal[0].label.as_deref(), Some("Personal cap"));
+        assert_eq!(personal[0].used_percent, 25.0);
+
+        let team = normalize_cursor_usage(&json!({
+            "limitType": "team",
+            "individualUsage": {"plan": {"totalPercentUsed": 5}},
+            "teamUsage": {"pooled": {"enabled": true, "used": "9000", "limit": "10000"}}
+        }));
+        assert_eq!(team[0].label.as_deref(), Some("Team pool"));
+        assert_eq!(team[0].used_percent, 90.0);
+
+        let disabled = normalize_cursor_usage(&json!({
+            "individualUsage": {"overall": {"enabled": false, "used": 9000, "limit": 10000}}
+        }));
+        assert!(disabled.is_empty());
+    }
+
+    #[test]
+    fn grok_prefers_refreshable_subscription_credentials() {
+        let auth = json!({
+            "xai::api_key": {"key": "api-key", "expires_at": "2030-01-01T00:00:00Z"},
+            "https://auth.x.ai::client": {
+                "key": "oauth-token",
+                "refresh_token": "refresh",
+                "expires_at": "2027-01-01T00:00:00Z",
+                "email": "person@example.com"
+            }
+        });
+        let credential = select_grok_credential(&auth).unwrap();
+        assert_eq!(credential.access_token, "oauth-token");
+        assert_eq!(credential.email.as_deref(), Some("person@example.com"));
+    }
+
+    #[test]
+    fn grok_billing_maps_zero_and_nonzero_subscription_usage() {
+        let idle = normalize_grok_usage(&json!({"config": {
+            "currentPeriod": {
+                "type": "USAGE_PERIOD_TYPE_WEEKLY",
+                "start": "2026-08-17T00:00:00Z",
+                "end": "2026-08-24T00:00:00Z"
+            }
+        }}));
+        assert_eq!(idle.len(), 1);
+        assert_eq!(idle[0].label.as_deref(), Some("Weekly"));
+        assert_eq!(idle[0].used_percent, 0.0);
+        assert_eq!(idle[0].duration_mins, Some(10_080));
+
+        let monthly = normalize_grok_usage(&json!({"config": {
+            "creditUsagePercent": 61.25,
+            "currentPeriod": {
+                "type": "USAGE_PERIOD_TYPE_MONTHLY",
+                "start": "2026-08-01T00:00:00Z",
+                "end": "2026-09-01T00:00:00Z"
+            }
+        }}));
+        assert_eq!(monthly[0].label.as_deref(), Some("Monthly"));
+        assert_eq!(monthly[0].used_percent, 61.25);
+
+        let no_period = normalize_grok_usage(&json!({"config": {
+            "creditUsagePercent": null,
+            "currentPeriod": null,
+            "onDemandUsed": {"val": 9000},
+            "onDemandCap": {"val": 10000}
+        }}));
+        assert_eq!(no_period.len(), 1);
+        assert_eq!(no_period[0].label.as_deref(), Some("Included credits"));
+        assert_eq!(no_period[0].used_percent, 0.0);
     }
 
     #[test]

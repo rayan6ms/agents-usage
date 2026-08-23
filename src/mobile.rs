@@ -168,7 +168,11 @@ async fn index() -> Response {
     static_response(
         INDEX_HTML.as_bytes(),
         "text/html; charset=utf-8",
-        "no-store",
+        // The shell contains no account data. Keeping it in WebView's HTTP
+        // cache lets the Android app reopen the separately persisted last
+        // state when the desktop is offline, including on cleartext LAN origins
+        // where service workers are unavailable.
+        "private, max-age=3600",
     )
 }
 
@@ -668,7 +672,7 @@ mod tests {
     use crate::WorkerCommand;
     use crate::config::AppConfig;
     use axum::body::Body;
-    use axum::http::header::{RETRY_AFTER, SET_COOKIE};
+    use axum::http::header::{CACHE_CONTROL, RETRY_AFTER, SET_COOKIE};
     use axum::http::{HeaderMap, HeaderValue, Request, StatusCode};
     use http_body_util::BodyExt;
     use std::sync::atomic::AtomicBool;
@@ -768,6 +772,17 @@ mod tests {
             persist_config: false,
             last_forced_refresh: Arc::new(Mutex::new(None)),
         });
+
+        let shell = app
+            .clone()
+            .oneshot(Request::get("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(shell.status(), StatusCode::OK);
+        assert_eq!(
+            shell.headers().get(CACHE_CONTROL).unwrap(),
+            "private, max-age=3600"
+        );
 
         let unauthenticated = app
             .clone()

@@ -6,6 +6,7 @@ const refreshButton = document.querySelector("#refresh");
 const connectionsButton = document.querySelector("#connections");
 const statusNode = document.querySelector("#live-status");
 const updatedNode = document.querySelector("#updated");
+const STATE_CACHE_KEY = "agents-usage:last-state:v1";
 const expandedOverrides = new Map();
 const revealedNames = new Set();
 const revealedEmails = new Set();
@@ -18,6 +19,53 @@ let resumedAt = Date.now();
 
 function endpoint(path) { return new URL(`./${path}`, window.location.href); }
 function escapeHtml(value) { return String(value ?? "").replace(/[&<>"']/g, character => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[character]); }
+
+function validState(value) {
+  return value && typeof value === "object" && Array.isArray(value.accounts) && Number.isFinite(value.server_time);
+}
+
+function restoreCachedState() {
+  try {
+    const cached = JSON.parse(localStorage.getItem(STATE_CACHE_KEY) || "null");
+    if (!cached || !validState(cached.state) || !Number.isFinite(cached.saved_at)) return false;
+    latestState = cached.state;
+    lastSuccess = cached.saved_at;
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function cacheState(state) {
+  try {
+    localStorage.setItem(STATE_CACHE_KEY, JSON.stringify({saved_at: Date.now(), state}));
+  } catch (_) {
+    // A full or disabled WebView storage area must not hide otherwise live data.
+  }
+}
+
+function clearCachedState() {
+  try { localStorage.removeItem(STATE_CACHE_KEY); } catch (_) {}
+  latestState = null;
+  lastSuccess = null;
+  accountsNode.innerHTML = '<div class="empty">This phone is no longer paired.</div>';
+}
+
+function currentServerTime() {
+  if (!latestState) return Math.floor(Date.now() / 1000);
+  return latestState.server_time + (lastSuccess ? Math.max(0, Math.floor((Date.now() - lastSuccess) / 1000)) : 0);
+}
+
+function lastUpdateText(prefix) {
+  if (!lastSuccess) return prefix;
+  const elapsed = Math.max(1, Math.round((Date.now() - lastSuccess) / 1000));
+  if (elapsed < 60) return `${prefix} ${elapsed}s ago`;
+  const minutes = Math.round(elapsed / 60);
+  if (minutes < 60) return `${prefix} ${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) return `${prefix} ${hours}h ago`;
+  return `${prefix} ${Math.round(hours / 24)}d ago`;
+}
 
 function colorValue(value) {
   if (/^#[0-9a-f]{6}$/i.test(value || "")) return value;
@@ -82,7 +130,8 @@ function barColor(account, window, accountCount) {
 
 function limitHtml(account, window, showResetCounter, accountCount) {
   const showReset = showResetCounter && window.resets_at;
-  const reset = showReset ? `<span class="reset-text"> • resets in <span class="reset-timer ${latestState.color_reset_timers ? "colored" : ""}" style="--timer-color:${timerColor(window, latestState.server_time)}">${countdown(window.resets_at, latestState.server_time)}</span></span>` : "";
+  const now = currentServerTime();
+  const reset = showReset ? `<span class="reset-text"> • resets in <span class="reset-timer ${latestState.color_reset_timers ? "colored" : ""}" style="--timer-color:${timerColor(window, now)}">${countdown(window.resets_at, now)}</span></span>` : "";
   return `<div class="limit"><span class="limit-label">${escapeHtml(windowLabel(window, false))}</span>${reset}<span class="bar"><span class="bar-fill" style="--remaining:${remaining(window)};--bar-color:${barColor(account, window, accountCount)}"></span></span><span class="percent">${percent(window)}</span></div>`;
 }
 
@@ -90,7 +139,7 @@ function expiryText(credit) {
   if (!credit.expires_at) return credit.description || "";
   const date = new Date(credit.expires_at * 1000);
   const dateText = date.toLocaleDateString(undefined, {month:"short", day:"numeric"});
-  const days = Math.max(0, Math.ceil((credit.expires_at - latestState.server_time) / 86400));
+  const days = Math.max(0, Math.ceil((credit.expires_at - currentServerTime()) / 86400));
   return `Expires ${dateText}${days ? ` · ${days} days` : ""}`;
 }
 
@@ -136,10 +185,16 @@ async function loadState({quiet = false} = {}) {
   requestInFlight = true;
   try {
     const response = await fetch(endpoint("api/state"), {cache:"no-store", credentials:"same-origin"});
-    if (response.status === 401) throw new Error("This phone is not paired. Open the private pairing link again.");
+    if (response.status === 401 || response.status === 403) {
+      clearCachedState();
+      throw new Error("This phone is not paired. Open the private pairing link again.");
+    }
     if (!response.ok) throw new Error(`Desktop returned ${response.status}.`);
-    latestState = await response.json();
+    const state = await response.json();
+    if (!validState(state)) throw new Error("Desktop returned an invalid usage update.");
+    latestState = state;
     lastSuccess = Date.now();
+    cacheState(latestState);
     if (!latestState.refreshing) locallyRefreshing = false;
     noticeNode.hidden = true;
     statusNode.className = "live-status online";
@@ -154,6 +209,7 @@ async function loadState({quiet = false} = {}) {
     locallyRefreshing = false;
     refreshButton.classList.remove("busy");
     refreshButton.disabled = false;
+    if (latestState) updatedNode.textContent = lastUpdateText("Desktop unavailable · last updated");
     if (!quiet && !latestState) accountsNode.innerHTML = '<div class="empty">The desktop companion is unavailable.</div>';
   } finally {
     requestInFlight = false;
@@ -165,7 +221,10 @@ async function refreshUsage() {
   render();
   try {
     const response = await fetch(endpoint("api/refresh"), {method:"POST", cache:"no-store", credentials:"same-origin"});
-    if (response.status === 401) throw new Error("This phone is not paired. Open the private pairing link again.");
+    if (response.status === 401 || response.status === 403) {
+      clearCachedState();
+      throw new Error("This phone is not paired. Open the private pairing link again.");
+    }
     if (!response.ok) throw new Error(`Refresh failed (${response.status}).`);
     setTimeout(() => loadState(), 500);
     setTimeout(() => loadState(), 1600);
@@ -210,9 +269,17 @@ document.addEventListener("visibilitychange", () => {
 });
 
 setInterval(() => {
-  if (lastSuccess) updatedNode.textContent = `Connected to desktop · checked ${Math.max(1, Math.round((Date.now() - lastSuccess) / 1000))}s ago`;
+  if (!lastSuccess) return;
+  if (statusNode.classList.contains("offline")) updatedNode.textContent = lastUpdateText("Desktop unavailable · last updated");
+  else updatedNode.textContent = lastUpdateText("Connected to desktop · checked");
 }, 1000);
 setInterval(() => { if (document.visibilityState === "visible") loadState({quiet:true}); }, 10000);
 
+if (restoreCachedState()) {
+  statusNode.className = "live-status offline";
+  statusNode.setAttribute("aria-label", "Reconnecting to desktop");
+  updatedNode.textContent = lastUpdateText("Last desktop update");
+  render();
+}
 loadState().then(refreshUsageIfStale);
 if ("serviceWorker" in navigator && window.isSecureContext) navigator.serviceWorker.register("./sw.js");
