@@ -88,8 +88,9 @@ for provider in ['openai', 'opencode', 'anthropic', 'google', 'cursor', 'xai']:
 assert 'zen/go/v1/usage' in providers
 assert '/api/oauth/usage' in providers
 assert 'retrieveUserQuota' in providers
-assert 'Cursor does not expose individual plan usage' in providers
-assert 'weekly usage pool only in Settings' in providers
+assert 'cursor.com/api/usage-summary' in providers and 'WorkosCursorSessionToken' in providers
+assert 'cli-chat-proxy.grok.com/v1/billing?format=credits' in providers
+assert 'x-xai-token-auth' in providers and 'creditUsagePercent' in providers
 assert 'gemini-credentials.json' in providers and 'secret_service::SecretService' in providers
 assert 'UsageBarColorSettings' in ui and 'usage-bar-color-mode-changed' in ui
 assert 'Green → red' in ui and 'usage-bar-custom-color-changed' in ui
@@ -104,8 +105,10 @@ assert 'MoveFileExW' in (root / 'src/config.rs').read_text()
 assert '<span class="reset-text"> • resets in <span class="reset-timer ' in mobile_js
 assert '.reset-timer.colored' in mobile_css and '.reset-text.colored' not in mobile_css
 assert 'always_show_reset_counter' in mobile_js and 'pin_short_global' not in mobile_js
+assert 'STATE_CACHE_KEY' in mobile_js and 'restoreCachedState' in mobile_js
 assert 'Always show reset counters' in ui and 'Always show 5-hour limits' not in ui
 assert 'Paste & pair' in android_main and 'Back to usage' in android_main
+assert 'LOAD_CACHE_ELSE_NETWORK' in android_main and 'usagePageAvailable' in android_main
 assert 'dangerButton("Remove")' in android_main and 'R.drawable.ic_delete' in android_main
 assert 'Color.rgb(39, 191, 206)' not in android_main
 assert 'applicationId "io.github.agentsusagetray.companion"' in android_build
