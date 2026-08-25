@@ -106,6 +106,8 @@ fn default_pairing_uses() -> u8 { 1 }
 pub struct MobileDevice {
     pub id: String,
     pub name: String,
+    #[serde(default)]
+    pub installation_id: Option<String>,
     pub token_hash: String,
     #[serde(default)]
     pub additional_token_hashes: Vec<String>,

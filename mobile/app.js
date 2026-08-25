@@ -72,6 +72,30 @@ function colorValue(value) {
   return ({red:"#ef4444",orange:"#f97316",yellow:"#eab308",green:"#22c55e",cyan:"#27bfce",blue:"#3b82f6",purple:"#8c6dd8",pink:"#ec4899",gray:"#9ca3af",black:"#141414"})[value] || "#27bfce";
 }
 
+function relativeLuminance(color) {
+  const channels = color.slice(1).match(/.{2}/g).map(value => parseInt(value, 16) / 255);
+  const linear = channels.map(value => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4);
+  return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2];
+}
+
+function visibleUsageColor(value) {
+  const color = colorValue(value);
+  if (relativeLuminance(color) >= 0.24) return color;
+  const source = color.slice(1).match(/.{2}/g).map(channel => parseInt(channel, 16));
+  let lower = 0;
+  let upper = 1;
+  let result = source;
+  for (let step = 0; step < 10; step += 1) {
+    const blend = (lower + upper) / 2;
+    result = source.map(channel => Math.round(channel + (255 - channel) * blend));
+    const candidate = `#${result.map(channel => channel.toString(16).padStart(2, "0")).join("")}`;
+    if (relativeLuminance(candidate) < 0.24) lower = blend;
+    else upper = blend;
+  }
+  result = source.map(channel => Math.round(channel + (255 - channel) * upper));
+  return `#${result.map(channel => channel.toString(16).padStart(2, "0")).join("")}`;
+}
+
 function sortedWindows(account) {
   const windows = [...account.windows].sort((a, b) => (a.duration_mins ?? Number.MAX_SAFE_INTEGER) - (b.duration_mins ?? Number.MAX_SAFE_INTEGER));
   if (!windows.length) return windows;
@@ -125,7 +149,7 @@ function timerColor(window, now) {
 function barColor(account, window, accountCount) {
   if (latestState.usage_bar_color_mode === "remaining") return `hsl(${120 * remaining(window)} 78% 52%)`;
   if (latestState.usage_bar_color_mode === "custom") return colorValue(latestState.usage_bar_custom_color);
-  return accountCount <= 1 ? "#ffffff" : colorValue(account.color);
+  return accountCount <= 1 ? "#ffffff" : visibleUsageColor(account.color);
 }
 
 function limitHtml(account, window, showResetCounter, accountCount) {

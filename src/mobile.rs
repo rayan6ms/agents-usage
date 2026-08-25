@@ -58,6 +58,7 @@ struct PairQuery {
     token: Option<String>,
     path: Option<String>,
     device: Option<String>,
+    device_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -251,6 +252,7 @@ async fn pair(
     let session_token = new_token();
     let session_hash = hash_token(&session_token);
     let device_name = normalized_device_name(query.device.as_deref());
+    let installation_id = normalized_installation_id(query.device_id.as_deref());
     let Ok(mut current_config) = state.config.lock() else {
         return (StatusCode::INTERNAL_SERVER_ERROR, "Desktop configuration is unavailable.").into_response();
     };
@@ -273,11 +275,32 @@ async fn pair(
     if !pairing_valid {
         return unauthorized();
     }
+    next_config.mobile.devices.retain(|device| device_is_active(device, now));
+    deduplicate_devices(&mut next_config.mobile.devices);
     let device_id = next_config
         .mobile
         .pairing
         .as_ref()
         .and_then(|pairing| pairing.device_id.clone())
+        .or_else(|| {
+            installation_id.as_ref().and_then(|installation_id| {
+                next_config
+                    .mobile
+                    .devices
+                    .iter()
+                    .find(|device| device.installation_id.as_ref() == Some(installation_id))
+                    .map(|device| device.id.clone())
+            })
+        })
+        .or_else(|| {
+            next_config
+                .mobile
+                .devices
+                .iter()
+                .filter(|device| device.installation_id.is_none() && device.name.eq_ignore_ascii_case(&device_name))
+                .max_by_key(|device| device.last_seen_at.unwrap_or(device.created_at))
+                .map(|device| device.id.clone())
+        })
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     if let Some(pairing) = next_config.mobile.pairing.as_mut() {
         pairing.remaining_uses = pairing.remaining_uses.saturating_sub(1);
@@ -286,15 +309,21 @@ async fn pair(
             next_config.mobile.pairing = None;
         }
     }
-    next_config.mobile.devices.retain(|device| device_is_active(device, now));
     if let Some(device) = next_config.mobile.devices.iter_mut().find(|device| device.id == device_id) {
-        device.additional_token_hashes.push(session_hash);
+        if device.token_hash != session_hash && !device.additional_token_hashes.contains(&session_hash) {
+            device.additional_token_hashes.push(session_hash);
+        }
+        device.name = device_name;
+        if installation_id.is_some() {
+            device.installation_id = installation_id;
+        }
         device.expires_at = 0;
         device.last_seen_at = Some(now);
     } else {
         next_config.mobile.devices.push(MobileDevice {
             id: device_id,
             name: device_name,
+            installation_id,
             token_hash: session_hash,
             additional_token_hashes: Vec::new(),
             created_at: now,
@@ -536,6 +565,7 @@ pub fn migrate_legacy_access(config: &mut AppConfig) -> bool {
     config.mobile.devices.push(MobileDevice {
         id: uuid::Uuid::new_v4().to_string(),
         name: "Previously paired phone".into(),
+        installation_id: None,
         token_hash: hash_token(&token),
         additional_token_hashes: Vec::new(),
         created_at: now,
@@ -556,7 +586,41 @@ pub fn make_device_sessions_persistent(config: &mut AppConfig) -> bool {
             changed = true;
         }
     }
+    changed |= deduplicate_devices(&mut config.mobile.devices);
     changed
+}
+
+fn deduplicate_devices(devices: &mut Vec<MobileDevice>) -> bool {
+    let original = devices.clone();
+    devices.sort_by_key(|device| {
+        std::cmp::Reverse((device.last_seen_at.unwrap_or(device.created_at), device.created_at))
+    });
+
+    let mut consolidated: Vec<MobileDevice> = Vec::with_capacity(devices.len());
+    for device in std::mem::take(devices) {
+        let duplicate = consolidated.iter_mut().find(|existing| {
+            match (&existing.installation_id, &device.installation_id) {
+                (Some(left), Some(right)) => left == right,
+                (None, None) => existing.name.trim().eq_ignore_ascii_case(device.name.trim()),
+                _ => false,
+            }
+        });
+        if let Some(existing) = duplicate {
+            merge_device_tokens(existing, &device);
+        } else {
+            consolidated.push(device);
+        }
+    }
+    *devices = consolidated;
+    *devices != original
+}
+
+fn merge_device_tokens(target: &mut MobileDevice, source: &MobileDevice) {
+    for token_hash in std::iter::once(&source.token_hash).chain(source.additional_token_hashes.iter()) {
+        if token_hash != &target.token_hash && !target.additional_token_hashes.contains(token_hash) {
+            target.additional_token_hashes.push(token_hash.clone());
+        }
+    }
 }
 
 pub fn device_is_active(device: &MobileDevice, now: i64) -> bool {
@@ -591,6 +655,14 @@ fn normalized_device_name(value: Option<&str>) -> String {
         .take(64)
         .collect::<String>();
     if sanitized.is_empty() { "Android phone".into() } else { sanitized }
+}
+
+fn normalized_installation_id(value: Option<&str>) -> Option<String> {
+    let value = value?.trim();
+    (value.len() >= 16
+        && value.len() <= 64
+        && value.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')))
+        .then(|| value.to_ascii_lowercase())
 }
 
 fn normalized_cookie_path(value: Option<&str>) -> String {
@@ -729,6 +801,7 @@ mod tests {
         config.mobile.devices.push(crate::config::MobileDevice {
             id: "phone".into(),
             name: "Phone".into(),
+            installation_id: None,
             token_hash: "hash".into(),
             additional_token_hashes: Vec::new(),
             created_at: now - 100,
@@ -748,6 +821,7 @@ mod tests {
         config.mobile.devices.push(crate::config::MobileDevice {
             id: "old-phone".into(),
             name: "Old phone".into(),
+            installation_id: None,
             token_hash: "hash".into(),
             additional_token_hashes: Vec::new(),
             created_at: now - 200,
@@ -756,6 +830,41 @@ mod tests {
         });
         assert!(make_device_sessions_persistent(&mut config));
         assert!(config.mobile.devices.is_empty());
+    }
+
+    #[test]
+    fn historical_duplicate_phones_keep_the_most_recent_record_and_all_sessions() {
+        let mut config = AppConfig::default();
+        let now = chrono::Utc::now().timestamp();
+        config.mobile.devices.extend([
+            crate::config::MobileDevice {
+                id: "older".into(),
+                name: "Google Pixel".into(),
+                installation_id: None,
+                token_hash: "older-primary".into(),
+                additional_token_hashes: vec!["older-route".into()],
+                created_at: now - 200,
+                expires_at: 0,
+                last_seen_at: Some(now - 100),
+            },
+            crate::config::MobileDevice {
+                id: "newer".into(),
+                name: "google pixel".into(),
+                installation_id: None,
+                token_hash: "newer-primary".into(),
+                additional_token_hashes: Vec::new(),
+                created_at: now - 50,
+                expires_at: 0,
+                last_seen_at: Some(now - 10),
+            },
+        ]);
+
+        assert!(make_device_sessions_persistent(&mut config));
+        assert_eq!(config.mobile.devices.len(), 1);
+        let device = &config.mobile.devices[0];
+        assert_eq!(device.id, "newer");
+        assert!(device.additional_token_hashes.contains(&"older-primary".into()));
+        assert!(device.additional_token_hashes.contains(&"older-route".into()));
     }
 
     #[tokio::test]
@@ -808,7 +917,7 @@ mod tests {
         }
 
         let uri = format!(
-            "/agents-usage/pair?token={pairing_token}&path=/agents-usage/&device=Pixel%20test"
+            "/agents-usage/pair?token={pairing_token}&path=/agents-usage/&device=Pixel%20test&device_id=11111111-2222-4333-8444-555555555555"
         );
         let paired = app
             .clone()
@@ -860,6 +969,25 @@ mod tests {
         assert!(state_body.contains("\"always_show_reset_counter\":true"));
         assert!(state_body.contains("\"show_banked_resets\":true"));
         assert!(!state_body.contains("pin_short_global"));
+
+        let next_pairing_token = {
+            let mut config = config.lock().unwrap();
+            create_pairing(&mut config, 1)
+        };
+        let repaired = app
+            .clone()
+            .oneshot(
+                Request::get(format!(
+                    "/agents-usage/pair?token={next_pairing_token}&path=/agents-usage/&device=Pixel%20test&device_id=11111111-2222-4333-8444-555555555555"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(repaired.status(), StatusCode::SEE_OTHER);
+        assert!(matches!(rx.recv().await, Some(WorkerCommand::MobileDeviceListChanged)));
+        assert_eq!(config.lock().unwrap().mobile.devices.len(), 1);
 
         let stale_refresh = app
             .clone()

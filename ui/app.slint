@@ -23,6 +23,7 @@ export struct AccountView {
     color-name: string,
     custom-color: bool,
     account-color: color,
+    usage-color: color,
     email: string,
     masked-email: string,
     accent: color,
@@ -572,7 +573,7 @@ component AccountRow inherits Rectangle {
         if (root.usage-bar-color-mode == "custom") {
             return root.usage-bar-custom-color;
         }
-        return root.account.accent;
+        return root.account.usage-color;
     }
 
     VerticalLayout {
@@ -817,7 +818,6 @@ component ColorChoiceButton inherits Rectangle {
 }
 
 component CustomColorButton inherits Rectangle {
-    in property <color> value;
     in property <bool> selected: false;
     callback clicked();
     width: 24px;
@@ -834,22 +834,12 @@ component CustomColorButton inherits Rectangle {
         y: 4px;
         width: 16px;
         height: 16px;
-        border-radius: 8px;
-        background: root.value;
-        border-width: root.selected ? 3px : 1px;
+        border-radius: 4px;
+        background: @linear-gradient(135deg,
+            #ef4444 0%, #eab308 25%, #22c55e 45%, #27bfce 62%,
+            #3b82f6 78%, #ec4899 100%);
+        border-width: root.selected ? 2px : 1px;
         border-color: root.selected ? Palette.foreground : Palette.border;
-    }
-    Text {
-        x: 15px;
-        y: 10px;
-        width: 8px;
-        height: 10px;
-        text: "+";
-        color: Palette.foreground;
-        font-size: 8px;
-        font-weight: 700;
-        horizontal-alignment: center;
-        vertical-alignment: center;
     }
     area := TouchArea { clicked => { root.clicked(); } }
 }
@@ -1167,8 +1157,7 @@ component AccountSettings inherits Rectangle {
                 }
             }
             CustomColorButton {
-                value: root.account.account-color;
-                selected: root.account.custom-color;
+                selected: root.account.custom-color || root.picker-open;
                 clicked => { root.picker-open = !root.picker-open; }
             }
         }

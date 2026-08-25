@@ -55,6 +55,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -63,6 +64,7 @@ public final class MainActivity extends Activity {
     private static final String PREFS = "connections";
     private static final String ENDPOINTS_KEY = "endpoint_bases";
     private static final String LAST_ENDPOINT_KEY = "last_endpoint";
+    private static final String DEVICE_ID_KEY = "device_id";
     private static final int BACKGROUND = Color.rgb(18, 19, 21);
     private static final int SURFACE = Color.rgb(32, 33, 36);
     private static final int CONTROL = Color.rgb(42, 44, 48);
@@ -84,6 +86,7 @@ public final class MainActivity extends Activity {
     private final AtomicInteger connectionGeneration = new AtomicInteger();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private SharedPreferences preferences;
+    private String deviceId;
     private FrameLayout root;
     private WebView webView;
     private ScrollView setupView;
@@ -133,6 +136,11 @@ public final class MainActivity extends Activity {
         getWindow().setStatusBarColor(BACKGROUND);
         getWindow().setNavigationBarColor(BACKGROUND);
         preferences = getSharedPreferences(PREFS, MODE_PRIVATE);
+        deviceId = preferences.getString(DEVICE_ID_KEY, null);
+        if (deviceId == null) {
+            deviceId = UUID.randomUUID().toString();
+            preferences.edit().putString(DEVICE_ID_KEY, deviceId).apply();
+        }
         connectivityManager = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
         loadEndpoints();
         buildInterface();
@@ -849,7 +857,9 @@ public final class MainActivity extends Activity {
     private String pairingRequestUrl(String pairingUrl) {
         try {
             String name = (Build.MANUFACTURER + " " + Build.MODEL).trim();
-            return pairingUrl + "&device=" + URLEncoder.encode(name, "UTF-8");
+            return pairingUrl
+                    + "&device=" + URLEncoder.encode(name, "UTF-8")
+                    + "&device_id=" + URLEncoder.encode(deviceId, "UTF-8");
         } catch (Exception ignored) {
             return pairingUrl;
         }

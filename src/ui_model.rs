@@ -27,6 +27,11 @@ pub fn account_view(record: &AccountRecord, enabled_count: usize, show_banked_re
     let provider_color = Color::from_rgb_u8(255, 255, 255);
     let account_color = color_from_name(&record.color_name);
     let accent = if enabled_count <= 1 { provider_color } else { account_color };
+    let usage_color = if enabled_count <= 1 {
+        provider_color
+    } else {
+        visible_usage_color(account_color)
+    };
     let show_accent = enabled_count > 1;
 
     let pin_short = record.pin_short && short.is_some();
@@ -98,6 +103,7 @@ pub fn account_view(record: &AccountRecord, enabled_count: usize, show_banked_re
         color_name: record.color_name.clone().into(),
         custom_color: record.color_name.starts_with('#'),
         account_color,
+        usage_color,
         email: record.email().into(),
         masked_email: mask_email(record.email()).into(),
         accent,
@@ -318,6 +324,47 @@ pub fn color_from_name(name: &str) -> Color {
     }
 }
 
+pub fn visible_usage_color(color: Color) -> Color {
+    const TARGET_LUMINANCE: f32 = 0.24;
+    if relative_luminance(color) >= TARGET_LUMINANCE {
+        return color;
+    }
+
+    let mut lower = 0.0_f32;
+    let mut upper = 1.0_f32;
+    for _ in 0..10 {
+        let blend = (lower + upper) / 2.0;
+        let candidate = blend_toward_white(color, blend);
+        if relative_luminance(candidate) < TARGET_LUMINANCE {
+            lower = blend;
+        } else {
+            upper = blend;
+        }
+    }
+    blend_toward_white(color, upper)
+}
+
+fn blend_toward_white(color: Color, amount: f32) -> Color {
+    let blend = |channel: u8| {
+        (channel as f32 + (255.0 - channel as f32) * amount).round() as u8
+    };
+    Color::from_rgb_u8(blend(color.red()), blend(color.green()), blend(color.blue()))
+}
+
+fn relative_luminance(color: Color) -> f32 {
+    let linear = |channel: u8| {
+        let value = channel as f32 / 255.0;
+        if value <= 0.04045 {
+            value / 12.92
+        } else {
+            ((value + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * linear(color.red())
+        + 0.7152 * linear(color.green())
+        + 0.0722 * linear(color.blue())
+}
+
 fn parse_hex_color(value: &str) -> Option<Color> {
     let hex = value.strip_prefix('#')?;
     if hex.len() != 6 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) { return None; }
@@ -337,7 +384,7 @@ pub const ACCOUNT_COLORS: [&str; 10] = [
 
 #[cfg(test)]
 mod tests {
-    use super::{ACCOUNT_COLORS, account_view, color_from_name, format_countdown, format_expiry, is_account_color, mask_account_name, primary_window_index, reset_timer_color};
+    use super::{ACCOUNT_COLORS, account_view, color_from_name, format_countdown, format_expiry, is_account_color, mask_account_name, primary_window_index, relative_luminance, reset_timer_color, visible_usage_color};
     use crate::domain::{AccountRecord, RateWindow, ResetCredit, UsageSnapshot};
     use chrono::{Local, TimeZone};
     use slint::Model;
@@ -355,6 +402,17 @@ mod tests {
         assert!(!is_account_color("#12345"));
         let custom = color_from_name("#12abcf");
         assert_eq!((custom.red(), custom.green(), custom.blue()), (0x12, 0xab, 0xcf));
+    }
+
+    #[test]
+    fn dark_account_colors_are_lifted_for_usage_bar_contrast() {
+        let black = color_from_name("black");
+        let visible = visible_usage_color(black);
+        assert!(relative_luminance(visible) >= 0.24);
+        assert!(visible.red() > black.red());
+
+        let green = color_from_name("green");
+        assert_eq!(visible_usage_color(green), green);
     }
 
     #[test]

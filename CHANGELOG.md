@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.3 — 2026-08-25
+
+- Kept very dark account colors legible in quota bars on desktop and phone while preserving the chosen color for account indicators.
+- Replaced the ambiguous custom-color swatch with a distinct spectrum control and kept the account color picker open while selecting hue, saturation, and brightness.
+- Gave Android installations stable identities, consolidated historical duplicate phone entries into the most recently used record, and preserved their working LAN and Tailscale sessions.
+- Added dashboard, settings, and account-color screenshots to the README.
+
 ## 0.4.2 — 2026-08-25
 
 - Added an option to hide banked resets across desktop and phone views, while showing their exact local expiration time when visible.

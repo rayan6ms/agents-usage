@@ -16,6 +16,10 @@ Windows and macOS builds are not production-signed or notarized yet, so the oper
 
 Launch Agents Usage, then click its tray icon to open the usage panel. The app discovers signed-in provider accounts automatically and validates each candidate before displaying it. Press Refresh after adding or changing a provider sign-in; there is no token-pasting or provider configuration step.
 
+| Dashboard | Settings | Account colors |
+| :---: | :---: | :---: |
+| <img src="assets/examples/main-menu.png" alt="Agents Usage dashboard with several coding-agent accounts" width="260"> | <img src="assets/examples/settings-menu.png" alt="Agents Usage settings and phone companion controls" width="260"> | <img src="assets/examples/account-colored.png" alt="Agents Usage dashboard with account-colored quota bars" width="260"> |
+
 ## Providers
 
 | Provider | Automatic source | What Agents Usage shows |
@@ -43,7 +47,7 @@ Open desktop **Settings → Phone companion** and turn it on. New installations 
 
 **Set up Tailscale** configures a private HTTPS path for access away from home. Tailscale must already be installed and signed into the same tailnet on both devices; an operating system may still request administrator approval. If explicitly enabled, direct LAN access uses TCP `3765`, so the desktop firewall may require one private-network approval. Never forward this port on a router and do not enable Tailscale Funnel.
 
-Each phone receives an independent session that remains connected until it is revoked from desktop settings or its app data is cleared. Pairing links expire after ten minutes, are valid only for the addresses included in that pairing operation, and are removed from the phone after use. Android health-checks the saved routes, switches between LAN and Tailscale after network changes, and exposes visible Connections and Back controls. After one successful load, the last usage snapshot remains available when the desktop is asleep or disconnected and is clearly marked with its age.
+Each phone installation receives an independent session that remains connected until it is revoked from desktop settings or its app data is cleared. Re-pairing the same installation refreshes that one phone entry instead of creating duplicates. Pairing links expire after ten minutes, are valid only for the addresses included in that pairing operation, and are removed from the phone after use. Android health-checks the saved routes, switches between LAN and Tailscale after network changes, and exposes visible Connections and Back controls. After one successful load, the last usage snapshot remains available when the desktop is asleep or disconnected and is clearly marked with its age.
 
 Command-line controls remain available for recovery and scripted setups:
 

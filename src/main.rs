@@ -2391,10 +2391,8 @@ fn main() -> Result<(), slint::PlatformError> {
         });
     }
     {
-        let ui_weak = ui.as_weak();
         let accounts = accounts.clone();
         let config_arc = config.clone();
-        let last_anchor = last_anchor_shared.clone();
         let tx = tx.clone();
         ui.on_account_custom_color_changed(move |id, color| {
             let color = color_hex(color);
@@ -2407,9 +2405,6 @@ fn main() -> Result<(), slint::PlatformError> {
             if let Some((provider_id, home)) = home {
                 if let Ok(mut cfg) = config_arc.lock() {
                     config::preference_for_provider_mut(&mut cfg, &provider_id, &home).color = Some(color);
-                }
-                if let Some(ui) = ui_weak.upgrade() {
-                    render_ui(&ui, &accounts, &config_arc, &last_anchor, None);
                 }
                 send(&tx, WorkerCommand::PersistSettings);
             }
