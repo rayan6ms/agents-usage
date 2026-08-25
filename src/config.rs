@@ -20,6 +20,8 @@ pub struct AppConfig {
     pub usage_bar_custom_color: String,
     #[serde(default, alias = "pin_short_global")]
     pub always_show_reset_counter: bool,
+    #[serde(default = "default_true")]
+    pub show_banked_resets: bool,
     #[serde(default)]
     pub codex_executable: Option<PathBuf>,
     #[serde(default)]
@@ -40,6 +42,7 @@ impl Default for AppConfig {
             usage_bar_color_mode: UsageBarColorMode::default(),
             usage_bar_custom_color: default_usage_bar_custom_color(),
             always_show_reset_counter: false,
+            show_banked_resets: true,
             codex_executable: None,
             additional_codex_homes: Vec::new(),
             accounts: Vec::new(),
@@ -462,6 +465,7 @@ pin_short = false
         assert!(!config.blur_names);
         assert!(!config.color_reset_timers);
         assert!(!config.always_show_reset_counter);
+        assert!(config.show_banked_resets);
         assert_eq!(config.usage_bar_color_mode, super::UsageBarColorMode::Account);
         assert_eq!(config.usage_bar_custom_color, "#27bfce");
     }
@@ -516,12 +520,14 @@ port = 3765
         let config = AppConfig {
             usage_bar_color_mode: super::UsageBarColorMode::Custom,
             usage_bar_custom_color: "#123abc".into(),
+            show_banked_resets: false,
             ..AppConfig::default()
         };
         let encoded = toml::to_string(&config).unwrap();
         let restored: AppConfig = toml::from_str(&encoded).unwrap();
         assert_eq!(restored.usage_bar_color_mode, super::UsageBarColorMode::Custom);
         assert_eq!(restored.usage_bar_custom_color, "#123abc");
+        assert!(!restored.show_banked_resets);
         assert_eq!(super::UsageBarColorMode::parse("remaining"), Some(super::UsageBarColorMode::Remaining));
         assert_eq!(super::UsageBarColorMode::parse("invalid"), None);
     }

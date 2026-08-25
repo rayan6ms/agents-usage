@@ -9,7 +9,7 @@ pub const PANEL_BOTTOM_PADDING: f32 = 17.0;
 pub const EMPTY_CONTENT_HEIGHT: f32 = 72.0;
 pub const PANEL_MAX_HEIGHT: f32 = 680.0;
 
-pub fn account_view(record: &AccountRecord, enabled_count: usize) -> AccountView {
+pub fn account_view(record: &AccountRecord, enabled_count: usize, show_banked_resets: bool) -> AccountView {
     let snapshot = record.snapshot.as_ref();
     let mut windows: Vec<&RateWindow> = snapshot
         .map(|snapshot| snapshot.windows.iter().collect())
@@ -38,9 +38,10 @@ pub fn account_view(record: &AccountRecord, enabled_count: usize) -> AccountView
                 || pin_short && short.is_some_and(|pinned| std::ptr::eq(*window, pinned)))
         })
         .collect::<Vec<_>>();
-    let reset_count = snapshot.map(|value| value.reset_available_count).unwrap_or(0);
+    let mut reset_count = 0;
     let mut credits = Vec::new();
-    if let Some(snapshot) = snapshot {
+    if show_banked_resets && let Some(snapshot) = snapshot {
+        reset_count = snapshot.reset_available_count;
         for credit in snapshot.reset_credits.iter().filter(|credit| {
             credit.status.as_deref().map(|status| status == "available").unwrap_or(true)
         }) {
@@ -54,6 +55,7 @@ pub fn account_view(record: &AccountRecord, enabled_count: usize) -> AccountView
                     .into(),
             });
         }
+        reset_count = reset_count.max(credits.len() as u32);
         if reset_count > credits.len() as u32 {
             credits.push(ResetCreditView {
                 id: "__next__".into(),
@@ -152,7 +154,7 @@ pub fn account_view(record: &AccountRecord, enabled_count: usize) -> AccountView
     }
 }
 
-pub fn panel_height(records: &[AccountRecord]) -> f32 {
+pub fn panel_height(records: &[AccountRecord], show_banked_resets: bool) -> f32 {
     let enabled_count = records.iter().filter(|record| record.enabled).count();
     if enabled_count == 0 {
         return PANEL_HEADER_HEIGHT + EMPTY_CONTENT_HEIGHT;
@@ -160,16 +162,16 @@ pub fn panel_height(records: &[AccountRecord]) -> f32 {
     let rows = records
         .iter()
         .filter(|record| record.enabled)
-        .map(|record| account_view(record, enabled_count).row_height_px)
+        .map(|record| account_view(record, enabled_count, show_banked_resets).row_height_px)
         .sum::<f32>();
     (PANEL_HEADER_HEIGHT + rows + PANEL_BOTTOM_PADDING).clamp(128.0, PANEL_MAX_HEIGHT)
 }
 
-pub fn model(records: &[AccountRecord]) -> (ModelRc<AccountView>, usize) {
+pub fn model(records: &[AccountRecord], show_banked_resets: bool) -> (ModelRc<AccountView>, usize) {
     let enabled_count = records.iter().filter(|record| record.enabled).count();
     let rows = records
         .iter()
-        .map(|record| account_view(record, enabled_count))
+        .map(|record| account_view(record, enabled_count, show_banked_resets))
         .collect::<Vec<_>>();
     (Rc::new(VecModel::from(rows)).into(), enabled_count)
 }
@@ -270,11 +272,15 @@ fn format_expiry(timestamp: i64, now: i64) -> String {
     let date_text = date
         .map(|value| {
             const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-            format!("{} {}", MONTHS[value.month0() as usize], value.day())
+            format!("{} {} at {}", MONTHS[value.month0() as usize], value.day(), value.format("%H:%M"))
         })
         .unwrap_or_else(|| "Unknown expiry".into());
     let days = ((timestamp - now).max(0) + 86_399) / 86_400;
-    if days > 0 { format!("Expires {date_text} · {days} days") } else { format!("Expires {date_text}") }
+    match days {
+        0 => format!("Expires {date_text}"),
+        1 => format!("Expires {date_text} · 1 day"),
+        _ => format!("Expires {date_text} · {days} days"),
+    }
 }
 
 pub(crate) fn mask_email(email: &str) -> String {
@@ -331,8 +337,11 @@ pub const ACCOUNT_COLORS: [&str; 10] = [
 
 #[cfg(test)]
 mod tests {
-    use super::{ACCOUNT_COLORS, color_from_name, format_countdown, is_account_color, mask_account_name, primary_window_index, reset_timer_color};
-    use crate::domain::RateWindow;
+    use super::{ACCOUNT_COLORS, account_view, color_from_name, format_countdown, format_expiry, is_account_color, mask_account_name, primary_window_index, reset_timer_color};
+    use crate::domain::{AccountRecord, RateWindow, ResetCredit, UsageSnapshot};
+    use chrono::{Local, TimeZone};
+    use slint::Model;
+    use std::path::PathBuf;
 
     #[test]
     fn account_color_validation_matches_the_exposed_palette() {
@@ -388,6 +397,54 @@ mod tests {
         assert_eq!(format_countdown(5 * 60 * 60 - 1, 0), "5h 00m");
         assert_eq!(format_countdown(1, 0), "1m");
         assert_eq!(format_countdown(0, 0), "0m");
+    }
+
+    #[test]
+    fn reset_credit_expiry_includes_the_exact_local_time() {
+        let expiry = Local.with_ymd_and_hms(2026, 1, 15, 3, 4, 0).single().unwrap().timestamp();
+        assert_eq!(format_expiry(expiry, expiry), "Expires Jan 15 at 03:04");
+        assert_eq!(format_expiry(expiry, expiry - 1), "Expires Jan 15 at 03:04 · 1 day");
+    }
+
+    #[test]
+    fn banked_resets_can_be_hidden_without_leaving_empty_details() {
+        let record = AccountRecord {
+            id: "account".into(),
+            home: PathBuf::new(),
+            provider_id: "openai".into(),
+            display_name: "Account".into(),
+            color_name: "cyan".into(),
+            enabled: true,
+            pin_short: false,
+            expanded: true,
+            name_revealed: false,
+            email_revealed: false,
+            confirm_credit_id: String::new(),
+            snapshot: Some(UsageSnapshot {
+                email: None,
+                bucket_name: None,
+                windows: Vec::new(),
+                reset_available_count: 0,
+                reset_credits: vec![ResetCredit {
+                    id: Some("credit".into()),
+                    title: None,
+                    description: None,
+                    expires_at: None,
+                    status: Some("available".into()),
+                }],
+            }),
+            last_error: None,
+        };
+
+        let shown = account_view(&record, 1, true);
+        let hidden = account_view(&record, 1, false);
+        assert!(shown.has_reset_credits);
+        assert_eq!(shown.reset_credits.row_count(), 1);
+        assert!(shown.has_hidden_details);
+        assert!(!hidden.has_reset_credits);
+        assert_eq!(hidden.reset_credits.row_count(), 0);
+        assert!(!hidden.has_hidden_details);
+        assert!(shown.row_height_px > hidden.row_height_px);
     }
 
     #[test]

@@ -31,6 +31,7 @@ import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
+import android.webkit.WebStorage;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Button;
@@ -95,6 +96,8 @@ public final class MainActivity extends Activity {
     private boolean mainFrameFailed;
     private boolean periodicHealthEnabled;
     private boolean healthCheckInProgress;
+    private boolean usagePageAvailable;
+    private boolean loadingCachedFallback;
     private String currentBase;
     private ConnectivityManager connectivityManager;
     private boolean networkCallbackRegistered;
@@ -225,6 +228,10 @@ public final class MainActivity extends Activity {
 
     private void handleBack() {
         if (setupView.getVisibility() == View.VISIBLE) {
+            if (usagePageAvailable) {
+                showUsagePage();
+                return;
+            }
             if (endpointBases.isEmpty()) {
                 finish();
             } else {
@@ -269,7 +276,7 @@ public final class MainActivity extends Activity {
         setupBackButton.setContentDescription("Back to usage");
         setupBackButton.setPadding(dp(9), dp(9), dp(9), dp(9));
         setupBackButton.setBackgroundColor(Color.TRANSPARENT);
-        setupBackButton.setOnClickListener(view -> connectToPreferredEndpoint());
+        setupBackButton.setOnClickListener(view -> handleBack());
         LinearLayout.LayoutParams backParams = new LinearLayout.LayoutParams(dp(40), dp(40));
         backParams.setMargins(dp(-7), 0, dp(3), 0);
         header.addView(setupBackButton, backParams);
@@ -357,7 +364,10 @@ public final class MainActivity extends Activity {
         noticeView = text("", 13, DANGER);
         noticeView.setPadding(dp(10), dp(9), dp(10), dp(9));
         noticeView.setVisibility(View.GONE);
-        content.addView(noticeView);
+        LinearLayout.LayoutParams noticeParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        noticeParams.setMargins(0, dp(12), 0, 0);
+        content.addView(noticeView, noticeParams);
 
         TextView savedTitle = text("SAVED DESKTOPS", 12, MUTED);
         savedTitle.setLetterSpacing(0.12f);
@@ -412,6 +422,7 @@ public final class MainActivity extends Activity {
         settings.setGeolocationEnabled(false);
         settings.setMediaPlaybackRequiresUserGesture(true);
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
+        settings.setCacheMode(WebSettings.LOAD_DEFAULT);
         settings.setSafeBrowsingEnabled(true);
         settings.setUserAgentString(settings.getUserAgentString() + " AgentsUsageAndroid/" + BuildConfig.VERSION_NAME);
 
@@ -435,6 +446,10 @@ public final class MainActivity extends Activity {
         hideKeyboard();
         attemptedBases.clear();
         mainFrameFailed = false;
+        usagePageAvailable = false;
+        loadingCachedFallback = false;
+        currentBase = null;
+        webView.getSettings().setCacheMode(WebSettings.LOAD_DEFAULT);
         showNotice("Connecting to the desktop…", false);
         setupView.setVisibility(View.VISIBLE);
         webView.setVisibility(View.INVISIBLE);
@@ -462,6 +477,9 @@ public final class MainActivity extends Activity {
         currentBase = baseUrl;
         attemptedBases.add(baseUrl);
         mainFrameFailed = false;
+        usagePageAvailable = false;
+        loadingCachedFallback = false;
+        webView.getSettings().setCacheMode(WebSettings.LOAD_DEFAULT);
         setupView.setVisibility(View.GONE);
         webView.setVisibility(View.VISIBLE);
         webView.loadUrl(baseUrl);
@@ -475,7 +493,10 @@ public final class MainActivity extends Activity {
             }
         }
         if (candidates.isEmpty()) {
-            showSetup(reason == null ? "None of the saved desktops could be reached." : reason);
+            handleConnectionFailure(
+                    currentBase,
+                    reason == null ? "None of the saved desktops could be reached." : reason,
+                    false);
         } else {
             probeAndLoad(candidates, reason);
         }
@@ -486,28 +507,41 @@ public final class MainActivity extends Activity {
         healthCheckInProgress = true;
         connectionExecutor.execute(() -> {
             String selected = null;
-            boolean unauthorized = false;
+            List<String> rejected = new ArrayList<>();
             for (String base : candidates) {
                 int status = healthStatus(base);
                 if (status == HttpURLConnection.HTTP_NO_CONTENT) {
                     selected = base;
                     break;
                 }
-                if (status == HttpURLConnection.HTTP_UNAUTHORIZED) unauthorized = true;
+                if (status == HttpURLConnection.HTTP_UNAUTHORIZED
+                        || status == HttpURLConnection.HTTP_FORBIDDEN) rejected.add(base);
             }
             String healthyBase = selected;
-            boolean pairingRequired = unauthorized;
+            List<String> rejectedBases = rejected;
             mainHandler.post(() -> {
                 if (generation != connectionGeneration.get() || isFinishing() || isDestroyed()) return;
                 healthCheckInProgress = false;
+                for (String rejectedBase : rejectedBases) clearEndpointStorage(rejectedBase);
                 if (healthyBase != null) {
                     attemptedBases.clear();
                     loadEndpoint(healthyBase);
                 } else {
-                    String message = pairingRequired
+                    String fallbackBase = null;
+                    for (String base : candidates) {
+                        if (!rejectedBases.contains(base)) {
+                            fallbackBase = base;
+                            break;
+                        }
+                    }
+                    boolean pairingRequired = fallbackBase == null && !rejectedBases.isEmpty();
+                    String message = !rejectedBases.isEmpty()
                             ? "A saved desktop rejected this phone. Generate a new pairing link."
                             : failureMessage;
-                    showSetup(message == null ? "None of the saved desktops could be reached." : message);
+                    handleConnectionFailure(
+                            pairingRequired ? rejectedBases.get(0) : fallbackBase,
+                            message == null ? "None of the saved desktops could be reached." : message,
+                            pairingRequired);
                 }
             });
         });
@@ -516,6 +550,68 @@ public final class MainActivity extends Activity {
     private int healthStatus(String base) {
         String cookie = CookieManager.getInstance().getCookie(base);
         return EndpointHealthProbe.check(base, cookie, HEALTH_TIMEOUT_MS);
+    }
+
+    private void handleConnectionFailure(String fallbackBase, String message, boolean pairingRequired) {
+        if (pairingRequired) {
+            String rejectedBase = fallbackBase != null ? fallbackBase : currentBase;
+            if (rejectedBase != null) clearEndpointStorage(rejectedBase);
+            showSetup(message);
+            return;
+        }
+        if (usagePageAvailable) {
+            if (setupView.getVisibility() == View.VISIBLE) showSetup(message);
+            return;
+        }
+        if (fallbackBase != null && endpointBases.contains(fallbackBase)) {
+            loadCachedEndpoint(fallbackBase, message);
+            return;
+        }
+        showSetup(message);
+    }
+
+    private void loadCachedEndpoint(String baseUrl, String failureMessage) {
+        currentBase = baseUrl;
+        loadingCachedFallback = true;
+        mainFrameFailed = false;
+        attemptedBases.clear();
+        attemptedBases.add(baseUrl);
+        showNotice("Desktop unavailable. Opening the last update…", false);
+        setupView.setVisibility(View.VISIBLE);
+        webView.setVisibility(View.INVISIBLE);
+        webView.getSettings().setCacheMode(WebSettings.LOAD_CACHE_ELSE_NETWORK);
+        webView.setTag(failureMessage);
+        webView.loadUrl(baseUrl);
+    }
+
+    private void cachedEndpointFailed(String reason) {
+        loadingCachedFallback = false;
+        usagePageAvailable = false;
+        webView.getSettings().setCacheMode(WebSettings.LOAD_DEFAULT);
+        Object failureMessage = webView.getTag();
+        webView.setTag(null);
+        showSetup(failureMessage instanceof String && !((String) failureMessage).trim().isEmpty()
+                ? (String) failureMessage
+                : reason);
+    }
+
+    private void showUsagePage() {
+        if (!usagePageAvailable) return;
+        connectionGeneration.incrementAndGet();
+        healthCheckInProgress = false;
+        showNotice(null, false);
+        setupView.setVisibility(View.GONE);
+        webView.setVisibility(View.VISIBLE);
+    }
+
+    private void clearEndpointStorage(String base) {
+        WebStorage.getInstance().deleteOrigin(origin(base));
+        if (!base.equals(currentBase)) return;
+        usagePageAvailable = false;
+        loadingCachedFallback = false;
+        currentBase = null;
+        webView.getSettings().setCacheMode(WebSettings.LOAD_DEFAULT);
+        webView.loadUrl("about:blank");
     }
 
     private void verifyCurrentEndpoint() {
@@ -529,6 +625,10 @@ public final class MainActivity extends Activity {
                 healthCheckInProgress = false;
                 if (isFinishing() || isDestroyed() || !checkedBase.equals(currentBase)) return;
                 if (status != HttpURLConnection.HTTP_NO_CONTENT) {
+                    if (status == HttpURLConnection.HTTP_UNAUTHORIZED
+                            || status == HttpURLConnection.HTTP_FORBIDDEN) {
+                        clearEndpointStorage(checkedBase);
+                    }
                     List<String> candidates = new ArrayList<>();
                     for (String base : endpointBases) {
                         if (!base.equals(checkedBase)) candidates.add(base);
@@ -565,6 +665,9 @@ public final class MainActivity extends Activity {
         } else {
             currentBase = baseUrl;
             attemptedBases.clear();
+            usagePageAvailable = true;
+            loadingCachedFallback = false;
+            webView.getSettings().setCacheMode(WebSettings.LOAD_DEFAULT);
             setupView.setVisibility(View.GONE);
             webView.setVisibility(View.VISIBLE);
         }
@@ -574,10 +677,14 @@ public final class MainActivity extends Activity {
         pendingPairing = null;
         pairingPreferredBase = null;
         pairingQueue.clear();
-        webView.stopLoading();
+        loadingCachedFallback = false;
+        webView.getSettings().setCacheMode(WebSettings.LOAD_DEFAULT);
+        if (!usagePageAvailable) {
+            webView.stopLoading();
+            currentBase = null;
+        }
         webView.setVisibility(View.GONE);
         setupView.setVisibility(View.VISIBLE);
-        currentBase = null;
         connectionGeneration.incrementAndGet();
         healthCheckInProgress = false;
         showNotice(message, true);
@@ -655,6 +762,7 @@ public final class MainActivity extends Activity {
         CookieManager.getInstance().setCookie(base, "agents_usage_mobile=; Path=" + cookiePath(base)
                 + "; Max-Age=0; HttpOnly; SameSite=Strict");
         CookieManager.getInstance().flush();
+        clearEndpointStorage(base);
         endpointBases.remove(base);
         if (base.equals(preferences.getString(LAST_ENDPOINT_KEY, null))) {
             preferences.edit().remove(LAST_ENDPOINT_KEY).apply();
@@ -756,6 +864,16 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private String origin(String base) {
+        try {
+            URI uri = new URI(base);
+            return new URI(uri.getScheme(), null, uri.getHost(), uri.getPort(), null, null, null)
+                    .toString();
+        } catch (URISyntaxException ignored) {
+            return base;
+        }
+    }
+
     private TextView text(String value, int size, int color) {
         TextView view = new TextView(this);
         view.setText(value);
@@ -832,6 +950,14 @@ public final class MainActivity extends Activity {
         public void onPageFinished(WebView view, String url) {
             super.onPageFinished(view, url);
             if (mainFrameFailed) return;
+            if (loadingCachedFallback) {
+                loadingCachedFallback = false;
+                usagePageAvailable = true;
+                webView.setTag(null);
+                webView.getSettings().setCacheMode(WebSettings.LOAD_DEFAULT);
+                setupView.setVisibility(View.GONE);
+                webView.setVisibility(View.VISIBLE);
+            }
             if (pendingPairing != null && EndpointParser.belongsToBase(url, pendingPairing.baseUrl)
                     && !urlPathEndsWithPair(url)) {
                 pairingSucceeded();
@@ -839,6 +965,8 @@ public final class MainActivity extends Activity {
             if (pendingPairing == null) {
                 for (String base : endpointBases) {
                     if (EndpointParser.belongsToBase(url, base)) {
+                        currentBase = base;
+                        usagePageAvailable = true;
                         preferences.edit().putString(LAST_ENDPOINT_KEY, base).apply();
                         attemptedBases.clear();
                         break;
@@ -853,7 +981,8 @@ public final class MainActivity extends Activity {
             if (!request.isForMainFrame()) return;
             mainFrameFailed = true;
             String reason = "Could not reach the desktop: " + error.getDescription();
-            if (pendingPairing != null) showSetup(reason);
+            if (loadingCachedFallback) cachedEndpointFailed(reason);
+            else if (pendingPairing != null) showSetup(reason);
             else view.post(() -> tryNextEndpoint(reason));
         }
 
@@ -865,7 +994,10 @@ public final class MainActivity extends Activity {
             String reason = response.getStatusCode() == 401
                     ? "Pairing was rejected. Generate a fresh link on the desktop."
                     : "The desktop returned HTTP " + response.getStatusCode() + ".";
+            boolean rejected = response.getStatusCode() == 401 || response.getStatusCode() == 403;
             if (pendingPairing != null) showSetup(reason);
+            else if (rejected) handleConnectionFailure(currentBase, reason, true);
+            else if (loadingCachedFallback) cachedEndpointFailed(reason);
             else view.post(() -> tryNextEndpoint(reason));
         }
 
@@ -874,7 +1006,8 @@ public final class MainActivity extends Activity {
             handler.cancel();
             mainFrameFailed = true;
             String reason = "The desktop certificate could not be verified.";
-            if (pendingPairing != null) showSetup(reason);
+            if (loadingCachedFallback) cachedEndpointFailed(reason);
+            else if (pendingPairing != null) showSetup(reason);
             else view.post(() -> tryNextEndpoint(reason));
         }
 

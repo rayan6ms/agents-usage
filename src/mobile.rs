@@ -70,6 +70,7 @@ struct MobileSnapshot {
     usage_bar_color_mode: String,
     usage_bar_custom_color: String,
     always_show_reset_counter: bool,
+    show_banked_resets: bool,
     accounts: Vec<MobileAccount>,
 }
 
@@ -168,7 +169,11 @@ async fn index() -> Response {
     static_response(
         INDEX_HTML.as_bytes(),
         "text/html; charset=utf-8",
-        "no-store",
+        // The shell contains no account data. Keeping it in WebView's HTTP
+        // cache lets the Android app reopen the separately persisted last
+        // state when the desktop is offline, including on cleartext LAN origins
+        // where service workers are unavailable.
+        "private, max-age=3600",
     )
 }
 
@@ -354,6 +359,7 @@ async fn api_state(State(state): State<MobileServerState>, headers: HeaderMap) -
         usage_bar_color_mode: config.usage_bar_color_mode.as_str().into(),
         usage_bar_custom_color: config.usage_bar_custom_color,
         always_show_reset_counter: config.always_show_reset_counter,
+        show_banked_resets: config.show_banked_resets,
         accounts,
     };
     let mut response = Json(snapshot).into_response();
@@ -668,7 +674,7 @@ mod tests {
     use crate::WorkerCommand;
     use crate::config::AppConfig;
     use axum::body::Body;
-    use axum::http::header::{RETRY_AFTER, SET_COOKIE};
+    use axum::http::header::{CACHE_CONTROL, RETRY_AFTER, SET_COOKIE};
     use axum::http::{HeaderMap, HeaderValue, Request, StatusCode};
     use http_body_util::BodyExt;
     use std::sync::atomic::AtomicBool;
@@ -769,6 +775,17 @@ mod tests {
             last_forced_refresh: Arc::new(Mutex::new(None)),
         });
 
+        let shell = app
+            .clone()
+            .oneshot(Request::get("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(shell.status(), StatusCode::OK);
+        assert_eq!(
+            shell.headers().get(CACHE_CONTROL).unwrap(),
+            "private, max-age=3600"
+        );
+
         let unauthenticated = app
             .clone()
             .oneshot(Request::get("/api/health").body(Body::empty()).unwrap())
@@ -841,6 +858,7 @@ mod tests {
         assert!(!state_body.contains("codex_executable"));
         assert!(!state_body.contains("additional_codex_homes"));
         assert!(state_body.contains("\"always_show_reset_counter\":true"));
+        assert!(state_body.contains("\"show_banked_resets\":true"));
         assert!(!state_body.contains("pin_short_global"));
 
         let stale_refresh = app

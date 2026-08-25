@@ -24,10 +24,10 @@ Launch Agents Usage, then click its tray icon to open the usage panel. The app d
 | OpenCode Go | OpenCode's local Go key and official Go usage API | 5-hour, weekly, and monthly quota |
 | Anthropic Claude | Claude Code subscription sign-in | Session, weekly, and model-scoped limits returned for the account |
 | Google Gemini | Gemini CLI Google sign-in and Code Assist quota API | Remaining quota and reset time for every returned model bucket |
-| Cursor | Cursor Agent CLI sign-in | Account discovery and authentication state; Cursor does not currently expose individual plan usage through a public API or CLI |
-| xAI Grok | Grok CLI sign-in | Account discovery; Grok currently exposes its consumer weekly pool only inside Settings |
+| Cursor | Cursor Agent CLI sign-in and authenticated usage summary | Included, Auto, and API usage; individual and team-plan fallbacks |
+| xAI Grok | Grok CLI sign-in and authenticated billing API | Included-credit usage and its weekly or monthly reset |
 
-Quota capabilities are deliberately provider-specific. Agents Usage does not invent a period that a provider omits and does not scrape private dashboards. See [provider support and troubleshooting](docs/providers.md) for the exact prerequisites and fallback behavior.
+Quota capabilities are deliberately provider-specific. Agents Usage does not invent periods or derive quota from billing cost. See [provider support and troubleshooting](docs/providers.md) for the exact prerequisites, authenticated sources, and fallback behavior.
 
 Settings let you rename, recolor, reorder, disable, and expand accounts. You can blur account names and emails, keep reset counters visible without expanding account details, choose preset or custom account colors, and optionally color reset timers from red toward green as the reset approaches. Usage bars can follow each account color, shift from green to red as quota is spent, or share one custom color.
 
@@ -43,7 +43,7 @@ Open desktop **Settings → Phone companion** and turn it on. New installations 
 
 **Set up Tailscale** configures a private HTTPS path for access away from home. Tailscale must already be installed and signed into the same tailnet on both devices; an operating system may still request administrator approval. If explicitly enabled, direct LAN access uses TCP `3765`, so the desktop firewall may require one private-network approval. Never forward this port on a router and do not enable Tailscale Funnel.
 
-Each phone receives an independent session that remains connected until it is revoked from desktop settings or its app data is cleared. Pairing links expire after ten minutes, are valid only for the addresses included in that pairing operation, and are removed from the phone after use. Android health-checks the saved routes, switches between LAN and Tailscale after network changes, and exposes visible Connections and Back controls.
+Each phone receives an independent session that remains connected until it is revoked from desktop settings or its app data is cleared. Pairing links expire after ten minutes, are valid only for the addresses included in that pairing operation, and are removed from the phone after use. Android health-checks the saved routes, switches between LAN and Tailscale after network changes, and exposes visible Connections and Back controls. After one successful load, the last usage snapshot remains available when the desktop is asleep or disconnected and is clearly marked with its age.
 
 Command-line controls remain available for recovery and scripted setups:
 
@@ -59,7 +59,7 @@ See the [complete phone setup and troubleshooting guide](docs/mobile-companion.m
 
 ## Current limitations
 
-- Cursor and Grok do not currently publish an individual consumer-plan usage API suitable for this app, so they are discovered without fabricated usage bars.
+- Cursor and Grok quota access depends on authenticated first-party endpoints used by their current clients; provider-side changes can require an adapter update.
 - The app relies on existing sign-ins in the providers' official CLIs; it does not perform sign-in or sign-out.
 - Linux tray placement is designed for GNOME and KDE Plasma. Other desktop environments may fall back to their standard StatusNotifier behavior.
 - Windows and macOS packages are built and verified on native GitHub runners, but still need broader real-device testing.
