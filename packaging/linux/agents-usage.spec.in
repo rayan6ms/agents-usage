@@ -8,7 +8,7 @@ AutoReqProv:    yes
 
 %description
 Agents Usage is a compact GNOME/KDE tray utility for viewing usage across
-local coding-agent accounts through the installed Codex App Server.
+supported coding-agent accounts through their installed CLIs and quota services.
 
 %prep
 

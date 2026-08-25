@@ -3,6 +3,12 @@
 /.packaging-cache/
 *.log
 .DS_Store
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.pfx
 /mobile-android/.gradle/
 /mobile-android/.idea/
 /mobile-android/local.properties
