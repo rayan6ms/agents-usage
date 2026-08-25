@@ -139,8 +139,10 @@ function expiryText(credit) {
   if (!credit.expires_at) return credit.description || "";
   const date = new Date(credit.expires_at * 1000);
   const dateText = date.toLocaleDateString(undefined, {month:"short", day:"numeric"});
+  const timeText = date.toLocaleTimeString(undefined, {hour:"numeric", minute:"2-digit"});
   const days = Math.max(0, Math.ceil((credit.expires_at - currentServerTime()) / 86400));
-  return `Expires ${dateText}${days ? ` · ${days} days` : ""}`;
+  const dayText = days === 1 ? " · 1 day" : days > 1 ? ` · ${days} days` : "";
+  return `Expires ${dateText} at ${timeText}${dayText}`;
 }
 
 function accountHtml(account, accountCount) {
@@ -149,16 +151,18 @@ function accountHtml(account, accountCount) {
   const longWindow = windows.at(-1) || null;
   const isExpanded = expandedOverrides.has(account.key) ? expandedOverrides.get(account.key) : account.expanded;
   const alwaysShowResetCounter = latestState.always_show_reset_counter === true;
+  const showBankedResets = latestState.show_banked_resets !== false;
+  const resetCountValue = Math.max(account.reset_available_count || 0, account.reset_credits.length);
   const pinShort = account.pin_short && !!shortWindow;
   const detailWindows = windows.slice(0, -1).filter((_, index) => !(pinShort && index === 0));
-  const hasDetails = detailWindows.length > 0 || !!longWindow?.resets_at || account.reset_available_count > 0;
+  const hasDetails = detailWindows.length > 0 || !!longWindow?.resets_at || (showBankedResets && resetCountValue > 0);
   const shownName = latestState.blur_names && !revealedNames.has(account.key) ? account.masked_display_name : account.display_name;
   const shownEmail = latestState.blur_emails && !revealedEmails.has(account.key) ? account.masked_email : account.email;
   const mainLimit = longWindow ? limitHtml(account, longWindow, isExpanded || alwaysShowResetCounter, accountCount) : `<div class="checking">${escapeHtml(account.error || "Checking usage…")}</div>`;
   const pinned = pinShort ? limitHtml(account, shortWindow, isExpanded || alwaysShowResetCounter, accountCount) : "";
   const detailLimits = isExpanded ? detailWindows.map(window => limitHtml(account, window, true, accountCount)).join("") : "";
-  const resetCount = isExpanded && account.reset_available_count ? `<div class="detail-line"><span>Reset credits</span><span>${account.reset_available_count} available</span></div>` : "";
-  const credits = isExpanded ? account.reset_credits.map(credit => `<div class="credit"><div class="credit-title">${escapeHtml(credit.title)}</div><div class="credit-expiry">${escapeHtml(expiryText(credit))}</div></div>`).join("") : "";
+  const resetCount = isExpanded && showBankedResets && resetCountValue ? `<div class="detail-line"><span>Reset credits</span><span>${resetCountValue} available</span></div>` : "";
+  const credits = isExpanded && showBankedResets ? account.reset_credits.map(credit => `<div class="credit"><div class="credit-title">${escapeHtml(credit.title)}</div><div class="credit-expiry">${escapeHtml(expiryText(credit))}</div></div>`).join("") : "";
   const error = longWindow && account.error ? `<div class="error">${escapeHtml(account.error)}</div>` : "";
   return `<article class="account" data-key="${account.key}" style="--account-color:${colorValue(account.color)}">
     <div class="account-head">

@@ -160,6 +160,66 @@ component AppSwitch inherits Rectangle {
     }
 }
 
+// The Fluent scrollbar grows from 2px to 6px on hover. The dashboard uses the
+// same scrolling behavior with a fixed-width indicator so account content does
+// not visually shift when the pointer reaches the right edge.
+component DashboardScrollView inherits Rectangle {
+    in property <bool> enabled: true;
+    out property <length> visible-height <=> scroll.visible-height;
+    in-out property <length> viewport-height <=> scroll.viewport-height;
+    in-out property <length> viewport-y <=> scroll.viewport-y;
+
+    background: transparent;
+
+    scroll := ScrollView {
+        width: parent.width;
+        height: parent.height;
+        enabled: root.enabled;
+        horizontal-scrollbar-policy: always-off;
+        vertical-scrollbar-policy: always-off;
+        mouse-drag-pan-enabled: false;
+        @children
+    }
+
+    if root.viewport-height > root.visible-height: Rectangle {
+        x: parent.width - 4px;
+        y: (-root.viewport-y / max(1px, root.viewport-height - root.visible-height)) * (parent.height - self.height);
+        width: 2px;
+        height: max(16px, parent.height * root.visible-height / root.viewport-height);
+        border-radius: 1px;
+        background: Palette.border;
+    }
+
+    if root.viewport-height > root.visible-height: drag-area := TouchArea {
+        property <length> drag-start-y;
+        property <length> drag-start-viewport-y;
+        x: parent.width - 10px;
+        width: 10px;
+        height: parent.height;
+        pointer-event(event) => {
+            if event.button == PointerEventButton.left && event.kind == PointerEventKind.down {
+                self.drag-start-y = self.mouse-y;
+                self.drag-start-viewport-y = root.viewport-y;
+            }
+        }
+        moved => {
+            if self.pressed {
+                root.viewport-y = max(
+                    root.visible-height - root.viewport-height,
+                    min(0px, self.drag-start-viewport-y - (self.mouse-y - self.drag-start-y) * root.viewport-height / root.visible-height)
+                );
+            }
+        }
+        scroll-event(event) => {
+            if event.delta-y != 0 {
+                root.viewport-y = max(root.visible-height - root.viewport-height, min(0px, root.viewport-y + event.delta-y));
+                return accept;
+            }
+            return reject;
+        }
+    }
+}
+
 component ProviderMark inherits Rectangle {
     in property <string> provider-id: "openai";
     in property <color> accent;
@@ -699,33 +759,35 @@ component SettingRow inherits Rectangle {
     callback changed(bool);
     height: 45px;
     background: transparent;
-    HorizontalLayout {
-        width: parent.width;
-        height: parent.height;
-        spacing: 8px;
-        VerticalLayout {
-            vertical-stretch: 1;
-            spacing: 0px;
-            Text {
-                text: root.title;
-                color: Palette.foreground;
-                font-size: 11px;
-                vertical-alignment: bottom;
-            }
-            Text {
-                text: root.subtitle;
-                color: Palette.foreground;
-                font-size: 8.5px;
-                opacity: 0.55;
-                vertical-alignment: top;
-            }
-        }
-        AppSwitch {
-            width: 38px;
-            label: root.title;
-            checked: root.checked;
-            toggled => { root.changed(self.checked); }
-        }
+    Text {
+        x: 0px;
+        y: 1px;
+        width: parent.width - 50px;
+        height: 20px;
+        text: root.title;
+        color: Palette.foreground;
+        font-size: 11px;
+        vertical-alignment: center;
+    }
+    Text {
+        x: 0px;
+        y: 21px;
+        width: parent.width - 50px;
+        height: 16px;
+        text: root.subtitle;
+        color: Palette.foreground;
+        font-size: 8.5px;
+        opacity: 0.55;
+        vertical-alignment: top;
+        overflow: elide;
+    }
+    AppSwitch {
+        x: parent.width - self.width;
+        y: 0px;
+        width: 38px;
+        label: root.title;
+        checked: root.checked;
+        toggled => { root.changed(self.checked); }
     }
 }
 
@@ -1299,6 +1361,7 @@ export component MainWindow inherits Window {
     in-out property <string> usage-bar-color-mode: "account";
     in-out property <color> usage-bar-custom-color: #27bfce;
     in-out property <bool> always-show-reset-counter: false;
+    in-out property <bool> show-banked-resets: true;
     in-out property <bool> motion-enabled: true;
     in-out property <bool> refreshing: false;
     in-out property <bool> reset-busy: false;
@@ -1332,6 +1395,7 @@ export component MainWindow inherits Window {
     callback usage-bar-color-mode-changed(string);
     callback usage-bar-custom-color-changed(color);
     callback always-show-reset-counter-changed(bool);
+    callback show-banked-resets-changed(bool);
     callback account-enabled-changed(string, bool);
     callback account-pin-short-changed(string, bool);
     callback account-name-changed(string, string);
@@ -1430,12 +1494,9 @@ export component MainWindow inherits Window {
                 wrap: word-wrap;
             }
 
-            if root.enabled-account-count > 0: ScrollView {
+            if root.enabled-account-count > 0: DashboardScrollView {
                 horizontal-stretch: 1;
                 vertical-stretch: 1;
-                horizontal-scrollbar-policy: always-off;
-                vertical-scrollbar-policy: as-needed;
-                mouse-drag-pan-enabled: false;
 
                 VerticalLayout {
                     width: parent.width;
@@ -1532,6 +1593,12 @@ export component MainWindow inherits Window {
                             subtitle: "Keep countdowns visible while account details are collapsed";
                             checked: root.always-show-reset-counter;
                             changed(value) => { root.always-show-reset-counter-changed(value); }
+                        }
+                        SettingRow {
+                            title: "Show banked resets";
+                            subtitle: "Show available reset credits in account details";
+                            checked: root.show-banked-resets;
+                            changed(value) => { root.show-banked-resets-changed(value); }
                         }
                         UsageBarColorSettings {
                             mode: root.usage-bar-color-mode;

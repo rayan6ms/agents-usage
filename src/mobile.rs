@@ -70,6 +70,7 @@ struct MobileSnapshot {
     usage_bar_color_mode: String,
     usage_bar_custom_color: String,
     always_show_reset_counter: bool,
+    show_banked_resets: bool,
     accounts: Vec<MobileAccount>,
 }
 
@@ -358,6 +359,7 @@ async fn api_state(State(state): State<MobileServerState>, headers: HeaderMap) -
         usage_bar_color_mode: config.usage_bar_color_mode.as_str().into(),
         usage_bar_custom_color: config.usage_bar_custom_color,
         always_show_reset_counter: config.always_show_reset_counter,
+        show_banked_resets: config.show_banked_resets,
         accounts,
     };
     let mut response = Json(snapshot).into_response();
@@ -856,6 +858,7 @@ mod tests {
         assert!(!state_body.contains("codex_executable"));
         assert!(!state_body.contains("additional_codex_homes"));
         assert!(state_body.contains("\"always_show_reset_counter\":true"));
+        assert!(state_body.contains("\"show_banked_resets\":true"));
         assert!(!state_body.contains("pin_short_global"));
 
         let stale_refresh = app

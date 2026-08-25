@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.2 — 2026-08-25
+
+- Added an option to hide banked resets across desktop and phone views, while showing their exact local expiration time when visible.
+- Kept the dashboard scrollbar at a steady width on hover and aligned settings switches directly with their labels.
+- Added concise contribution guidance covering regression checks and disclosure of AI-agent assistance.
+
 ## 0.4.1 — 2026-08-23
 
 - Kept the Android companion's last successful usage snapshot available while every desktop route is offline, with an explicit age indicator, advancing reset countdowns, and working Back navigation from Connections.

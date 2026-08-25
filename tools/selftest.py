@@ -6,6 +6,7 @@ import re
 root = Path(__file__).resolve().parents[1]
 required = [
     'Cargo.toml', '.cargo/config.toml', 'build.rs', 'README.md', 'LICENSE', 'CHANGELOG.md',
+    'CONTRIBUTING.md',
     'src/main.rs', 'src/codex.rs', 'src/config.rs', 'src/discovery.rs', 'src/providers.rs',
     'src/domain.rs', 'src/mobile.rs', 'src/ui_model.rs', 'ui/app.slint',
     'mobile/index.html', 'mobile/app.css', 'mobile/app.js',
@@ -97,7 +98,8 @@ assert 'Green → red' in ui and 'usage-bar-custom-color-changed' in ui
 assert 'account-move-requested' in ui
 assert 'settings-height-px' in ui
 assert 'vertical-scrollbar-policy: as-needed' in ui
-assert 'if root.enabled-account-count > 0: ScrollView' in ui
+assert 'if root.enabled-account-count > 0: DashboardScrollView' in ui
+assert 'title: "Show banked resets"' in ui
 assert 'padding-top: 8px' in ui
 assert 'Personal' not in ui and 'team@anthropic.example' not in ui
 assert 'StatusNotifierTray' in main and 'create_native_tray' in main
@@ -105,6 +107,7 @@ assert 'MoveFileExW' in (root / 'src/config.rs').read_text()
 assert '<span class="reset-text"> • resets in <span class="reset-timer ' in mobile_js
 assert '.reset-timer.colored' in mobile_css and '.reset-text.colored' not in mobile_css
 assert 'always_show_reset_counter' in mobile_js and 'pin_short_global' not in mobile_js
+assert 'show_banked_resets' in mobile_js
 assert 'STATE_CACHE_KEY' in mobile_js and 'restoreCachedState' in mobile_js
 assert 'Always show reset counters' in ui and 'Always show 5-hour limits' not in ui
 assert 'Paste & pair' in android_main and 'Back to usage' in android_main
