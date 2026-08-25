@@ -1,6 +1,6 @@
 [package]
 name = "agents-usage"
-version = "0.4.0"
+version = "0.4.2"
 edition = "2024"
 rust-version = "1.92"
 publish = false
@@ -39,6 +39,7 @@ copypasta = { version = "0.10", default-features = false, features = ["x11"] }
 url = "2"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 aes-gcm = "0.10"
+base64 = "0.22"
 scrypt = "0.11"
 whoami = "1.6"
 

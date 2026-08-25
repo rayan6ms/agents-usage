@@ -10,10 +10,10 @@ Agents Usage discovers providers from the same local state their official comman
 | [OpenCode Go](https://dev.opencode.ai/docs/go/) | OpenCode with an active `opencode-go` connection | `opencode.ai/zen/go/v1/usage` | Rolling 5-hour, weekly, and monthly windows |
 | [Anthropic Claude](https://code.claude.com/docs/en/statusline) | Claude Code subscription sign-in | Anthropic OAuth usage endpoint used by Claude Code | Session, weekly, and any model-scoped windows returned for the account |
 | [Google Gemini](https://github.com/google-gemini/gemini-cli) | Gemini CLI Google OAuth sign-in | Gemini Code Assist `retrieveUserQuota` | Every model quota bucket and its reset time |
-| [Cursor](https://docs.cursor.com/en/cli/reference/authentication) | Cursor Agent CLI on `PATH`, signed in | `cursor-agent status` | Account/authentication discovery only |
-| [xAI Grok](https://x.ai/news/grok-build-cli) | Grok CLI sign-in | Local auth plus the CLI's zero-cost `grok models` check | Account discovery only |
+| [Cursor](https://docs.cursor.com/en/cli/reference/authentication) | Cursor Agent CLI on `PATH`, signed in | Cursor's authenticated usage-summary endpoint | Included, Auto, and API usage; individual and team-plan fallbacks |
+| [xAI Grok](https://x.ai/news/grok-build-cli) | Grok CLI sign-in | Grok CLI's authenticated billing endpoint | Included-credit usage and the returned weekly or monthly period |
 
-[Cursor does not currently expose individual-plan usage through its CLI or a public API](https://forum.cursor.com/t/usage-api-cli-command/160967). [Grok's unified weekly consumer pool is shown in Grok Settings](https://docs.x.ai/grok/faq), not through Grok Build or a documented public API. Agents Usage shows those limitations directly instead of scraping cookies or presenting guessed values. If either provider adds a supported usage surface, its adapter can add bars without changing the desktop or phone data model.
+Cursor and Grok do not currently document these usage endpoints as stable public APIs. Agents Usage follows the authenticated, first-party request formats used by current CLI/account integrations, validates the returned periods and percentages, and keeps the last successful snapshot when a request is unavailable or rate-limited. It never derives a bar from spend or invents a quota period.
 
 ## Discovery and refresh behavior
 
@@ -25,9 +25,9 @@ Agents Usage discovers providers from the same local state their official comman
 
 ## Authentication and privacy
 
-OpenAI Codex is queried through its local App Server, so Agents Usage never reads its token. OpenCode Go, Claude, and Gemini do not expose an equivalent local usage service; for those providers Agents Usage reads the existing CLI credential only in memory and sends it solely to that provider's official HTTPS quota endpoint. Credentials are never included in the usage cache, mobile API, logs, or phone companion.
+OpenAI Codex is queried through its local App Server, so Agents Usage never reads its token. The other providers do not expose an equivalent local usage service; for them Agents Usage reads the existing CLI credential only in memory and sends it solely to that provider's first-party HTTPS quota endpoint. Credentials are never included in the usage cache, mobile API, logs, or phone companion.
 
-The Gemini adapter refreshes an expired access token with the installed-application OAuth client published by Gemini CLI, without changing the CLI's credential file. Claude asks the installed Claude CLI to validate/refresh its sign-in before reading usage. On macOS it supports Claude Code's Keychain-backed credential as well as its configuration file.
+The Gemini adapter refreshes an expired access token with the installed-application OAuth client published by Gemini CLI, without changing the CLI's credential file. Claude asks the installed Claude CLI to validate/refresh its sign-in before reading usage. On macOS it supports Claude Code's Keychain-backed credential as well as its configuration file. Grok delegates expired-session refresh to its installed CLI and then rereads the credential; Cursor reports an expired sign-in without modifying it.
 
 ## Troubleshooting
 
@@ -35,5 +35,5 @@ The Gemini adapter refreshes an expired access token with the installed-applicat
 - **OpenCode appears but not OpenCode Go:** a normal OpenCode Zen key is not a Go subscription. Connect the `opencode-go` provider in OpenCode.
 - **Claude says sign-in expired:** run `claude auth login`, then Refresh.
 - **Gemini says sign-in expired or Code Assist is unavailable:** run `gemini`, select Google sign-in, and complete any project or eligibility prompt there.
-- **Cursor is missing:** install Cursor Agent CLI and run `cursor-agent login`. A valid row will still explain that plan-usage bars are unavailable.
-- **Grok is missing:** install Grok CLI and complete its login flow. A valid row will still explain that the weekly consumer pool has no supported API.
+- **Cursor is missing or expired:** install Cursor Agent CLI and run `cursor-agent login`, then Refresh.
+- **Grok is missing or expired:** install Grok CLI and complete its login flow. Agents Usage asks the CLI to refresh an expired session once before reporting that login is required.
