@@ -7,4 +7,4 @@ Maintainer: Agents Usage maintainers <local@agents-usage.invalid>
 Depends: libc6, libfontconfig1, libfreetype6
 Description: Lightweight coding-agent account usage tray utility
  Agents Usage is a compact GNOME/KDE tray utility for viewing usage across
- local coding-agent accounts through the installed Codex App Server.
+ supported coding-agent accounts through their installed CLIs and quota services.
