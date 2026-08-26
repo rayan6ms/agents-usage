@@ -38,7 +38,7 @@ If an older browser shortcut named **Usage** is still on the launcher, it is a B
    - For private remote access, press **Set up Tailscale**. This runs the equivalent of:
 
      ```bash
-     tailscale serve --bg --set-path /agents-usage http://127.0.0.1:3765
+     tailscale serve --yes --bg --set-path /agents-usage http://127.0.0.1:3765
      ```
 
    - For direct same-network access, turn on **Allow direct LAN**. This changes the listener to all local interfaces; only do this on a network you trust.

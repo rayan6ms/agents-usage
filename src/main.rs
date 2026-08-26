@@ -156,18 +156,44 @@ fn discover_mobile_endpoints(port: u16) -> MobileEndpoints {
         })
         .map(|address| mobile_lan_url(address, port));
 
-    let tailscale = std::process::Command::new("tailscale")
+    let tailscale_status = std::process::Command::new("tailscale")
         .args(["status", "--json"])
         .output()
         .ok()
         .filter(|output| output.status.success())
-        .and_then(|output| serde_json::from_slice::<serde_json::Value>(&output.stdout).ok())
-        .and_then(|value| value.get("Self")?.get("DNSName")?.as_str().map(str::to_string))
-        .map(|name| name.trim_end_matches('.').to_string())
-        .filter(|name| !name.is_empty())
-        .map(|name| format!("https://{name}/agents-usage/"));
+        .and_then(|output| serde_json::from_slice::<serde_json::Value>(&output.stdout).ok());
+    let tailscale_serve_status = std::process::Command::new("tailscale")
+        .args(["serve", "status", "--json"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| serde_json::from_slice::<serde_json::Value>(&output.stdout).ok());
+    let tailscale = tailscale_status.as_ref().and_then(|status| {
+        let name = status.get("Self")?.get("DNSName")?.as_str()?.trim_end_matches('.');
+        if name.is_empty()
+            || status.get("BackendState").and_then(serde_json::Value::as_str) != Some("Running")
+            || !tailscale_serve_matches(tailscale_serve_status.as_ref()?, name, port)
+        {
+            return None;
+        }
+        Some(format!("https://{name}/agents-usage/"))
+    });
 
     MobileEndpoints { lan, tailscale }
+}
+
+fn tailscale_serve_matches(status: &serde_json::Value, dns_name: &str, port: u16) -> bool {
+    let expected_proxy = format!("http://127.0.0.1:{port}");
+    let expected_site = format!("{}:443", dns_name.trim_end_matches('.'));
+    status
+        .get("Web")
+        .and_then(serde_json::Value::as_object)
+        .and_then(|sites| sites.get(&expected_site))
+        .and_then(|site| site.get("Handlers"))
+        .and_then(|handlers| handlers.get("/agents-usage"))
+        .and_then(|handler| handler.get("Proxy"))
+        .and_then(serde_json::Value::as_str)
+        == Some(expected_proxy.as_str())
 }
 
 fn mobile_lan_url(address: std::net::IpAddr, port: u16) -> String {
@@ -2339,11 +2365,16 @@ fn main() -> Result<(), slint::PlatformError> {
             thread::spawn(move || {
                 let target = format!("http://127.0.0.1:{port}");
                 let result = std::process::Command::new("tailscale")
-                    .args(["serve", "--bg", "--set-path", "/agents-usage", &target])
+                    .args(["serve", "--yes", "--bg", "--set-path", "/agents-usage", &target])
                     .output();
                 let endpoints = discover_mobile_endpoints(port);
                 let status = match result {
-                    Ok(output) if output.status.success() => "Tailscale HTTPS is configured.".to_string(),
+                    Ok(output) if output.status.success() && endpoints.tailscale.is_some() => {
+                        "Tailscale HTTPS is configured and verified.".to_string()
+                    }
+                    Ok(output) if output.status.success() => {
+                        "Tailscale accepted the setup, but its HTTPS route could not be verified.".to_string()
+                    }
                     Ok(output) => {
                         let message = String::from_utf8_lossy(&output.stderr).trim().to_string();
                         if message.is_empty() {
@@ -2747,6 +2778,7 @@ mod tests {
         LaunchMode, PanelAnchor, PanelEdge, SCREEN_MARGIN_PX, desktop_uses_status_notifier, infer_panel_edge,
         launch_mode, mobile_lan_url, mobile_pairing_bundle, mobile_pairing_url, move_account, move_target, normalized_account_color,
         normalized_display_name, panel_position_for_size, placeholder_record, reconcile_cached_accounts,
+        tailscale_serve_matches,
     };
     use super::MobileEndpoints;
     use crate::config::{AccountPreference, AppConfig};
@@ -2813,6 +2845,22 @@ mod tests {
         assert_eq!(bundle.matches(token).count(), 1);
         assert!(bundle.contains("&base=http%3A%2F%2F192.168.1.20%3A3765%2F"));
         assert!(bundle.contains("&fallback=https%3A%2F%2Fdesktop.example.ts.net%2Fagents-usage%2F"));
+    }
+
+    #[test]
+    fn tailscale_route_is_only_advertised_when_serve_targets_this_companion() {
+        let status = serde_json::json!({
+            "Web": {
+                "desktop.example.ts.net:443": {
+                    "Handlers": {
+                        "/agents-usage": { "Proxy": "http://127.0.0.1:3765" }
+                    }
+                }
+            }
+        });
+        assert!(tailscale_serve_matches(&status, "desktop.example.ts.net", 3765));
+        assert!(!tailscale_serve_matches(&status, "desktop.example.ts.net", 4000));
+        assert!(!tailscale_serve_matches(&status, "other.example.ts.net", 3765));
     }
 
     #[test]

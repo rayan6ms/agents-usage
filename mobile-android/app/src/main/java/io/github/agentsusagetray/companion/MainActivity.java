@@ -80,7 +80,6 @@ public final class MainActivity extends Activity {
     private static final long HEALTH_INTERVAL_MS = 15000;
 
     private final List<String> endpointBases = new ArrayList<>();
-    private final List<EndpointParser.ParsedEndpoint> pairingQueue = new ArrayList<>();
     private final Set<String> attemptedBases = new LinkedHashSet<>();
     private final ExecutorService connectionExecutor = Executors.newSingleThreadExecutor();
     private final AtomicInteger connectionGeneration = new AtomicInteger();
@@ -95,7 +94,8 @@ public final class MainActivity extends Activity {
     private LinearLayout endpointList;
     private ImageButton setupBackButton;
     private EndpointParser.ParsedEndpoint pendingPairing;
-    private String pairingPreferredBase;
+    private PairingRouteSession pairingSession;
+    private boolean pairingPreparing;
     private boolean mainFrameFailed;
     private boolean periodicHealthEnabled;
     private boolean healthCheckInProgress;
@@ -108,7 +108,7 @@ public final class MainActivity extends Activity {
         @Override
         public void onAvailable(Network network) {
             mainHandler.post(() -> {
-                if (currentBase == null && !endpointBases.isEmpty() && pendingPairing == null) {
+                if (currentBase == null && !endpointBases.isEmpty() && !pairingActive()) {
                     connectToPreferredEndpoint();
                 } else {
                     verifyCurrentEndpoint();
@@ -442,15 +442,17 @@ public final class MainActivity extends Activity {
     }
 
     private void beginPairing(String link) {
+        List<EndpointParser.ParsedEndpoint> routes;
         try {
-            pairingQueue.clear();
-            pairingQueue.addAll(EndpointParser.parseAll(link));
-            pendingPairing = pairingQueue.remove(0);
-            pairingPreferredBase = pendingPairing.baseUrl;
+            routes = EndpointParser.parseAll(link);
         } catch (IllegalArgumentException error) {
             showSetup(error.getMessage());
             return;
         }
+        int generation = connectionGeneration.incrementAndGet();
+        pairingSession = null;
+        pendingPairing = null;
+        pairingPreparing = true;
         hideKeyboard();
         attemptedBases.clear();
         mainFrameFailed = false;
@@ -461,7 +463,22 @@ public final class MainActivity extends Activity {
         showNotice("Connecting to the desktop…", false);
         setupView.setVisibility(View.VISIBLE);
         webView.setVisibility(View.INVISIBLE);
-        webView.loadUrl(pairingRequestUrl(pendingPairing.pairingUrl));
+        List<String> savedBases = new ArrayList<>(endpointBases);
+        connectionExecutor.execute(() -> {
+            Set<String> healthyBases = new LinkedHashSet<>();
+            for (EndpointParser.ParsedEndpoint route : routes) {
+                if (savedBases.contains(route.baseUrl)
+                        && healthStatus(route.baseUrl) == HttpURLConnection.HTTP_NO_CONTENT) {
+                    healthyBases.add(route.baseUrl);
+                }
+            }
+            mainHandler.post(() -> {
+                if (generation != connectionGeneration.get() || isFinishing() || isDestroyed()) return;
+                pairingPreparing = false;
+                pairingSession = new PairingRouteSession(routes, healthyBases);
+                loadNextPairingRoute();
+            });
+        });
     }
 
     private void connectToPreferredEndpoint() {
@@ -471,6 +488,8 @@ public final class MainActivity extends Activity {
         }
         String preferred = preferences.getString(LAST_ENDPOINT_KEY, endpointBases.get(0));
         pendingPairing = null;
+        pairingSession = null;
+        pairingPreparing = false;
         showNotice("Connecting to a saved desktop…", false);
         if (!endpointBases.contains(preferred)) preferred = endpointBases.get(0);
         List<String> candidates = new ArrayList<>();
@@ -623,7 +642,7 @@ public final class MainActivity extends Activity {
     }
 
     private void verifyCurrentEndpoint() {
-        if (healthCheckInProgress || currentBase == null || pendingPairing != null
+        if (healthCheckInProgress || currentBase == null || pairingActive()
                 || setupView.getVisibility() == View.VISIBLE) return;
         String checkedBase = currentBase;
         healthCheckInProgress = true;
@@ -654,37 +673,54 @@ public final class MainActivity extends Activity {
         saveEndpoints();
         CookieManager.getInstance().flush();
         webView.clearHistory();
-        if (!pairingQueue.isEmpty()) {
-            pendingPairing = pairingQueue.remove(0);
+        pairingSession.succeedCurrent();
+        pendingPairing = null;
+        loadNextPairingRoute();
+    }
+
+    private void pairingFailed(String reason) {
+        pairingSession.failCurrent(reason);
+        pendingPairing = null;
+        loadNextPairingRoute();
+    }
+
+    private void loadNextPairingRoute() {
+        pendingPairing = pairingSession.next();
+        if (pendingPairing != null) {
             mainFrameFailed = false;
+            showNotice("Pairing " + pendingPairing.displayName + "…", false);
             webView.loadUrl(pairingRequestUrl(pendingPairing.pairingUrl));
             return;
         }
-        pendingPairing = null;
+        finishPairing();
+    }
+
+    private void finishPairing() {
+        PairingRouteSession completed = pairingSession;
+        pairingSession = null;
+        pairingPreparing = false;
+        if (completed.successCount() == 0) {
+            showSetup("Could not pair with any desktop route.\n" + completed.failureSummary());
+            return;
+        }
         pairingInput.setText("");
-        Toast.makeText(this, endpointBases.size() > 1 ? "LAN and Tailscale paired" : "Desktop paired", Toast.LENGTH_SHORT).show();
-        String preferred = pairingPreferredBase;
-        pairingPreferredBase = null;
+        String toast = completed.successCount() > 1
+                ? "LAN and Tailscale paired"
+                : completed.hasFailures()
+                        ? "Desktop paired; another route is unavailable"
+                        : "Desktop paired";
+        Toast.makeText(this, toast, completed.hasFailures() ? Toast.LENGTH_LONG : Toast.LENGTH_SHORT).show();
+        String preferred = completed.preferredBase();
         if (preferred != null && endpointBases.contains(preferred)) {
             preferences.edit().putString(LAST_ENDPOINT_KEY, preferred).apply();
         }
-        if (endpointBases.size() > 1) {
-            connectToPreferredEndpoint();
-        } else {
-            currentBase = baseUrl;
-            attemptedBases.clear();
-            usagePageAvailable = true;
-            loadingCachedFallback = false;
-            webView.getSettings().setCacheMode(WebSettings.LOAD_DEFAULT);
-            setupView.setVisibility(View.GONE);
-            webView.setVisibility(View.VISIBLE);
-        }
+        connectToPreferredEndpoint();
     }
 
     private void showSetup(String message) {
         pendingPairing = null;
-        pairingPreferredBase = null;
-        pairingQueue.clear();
+        pairingSession = null;
+        pairingPreparing = false;
         loadingCachedFallback = false;
         webView.getSettings().setCacheMode(WebSettings.LOAD_DEFAULT);
         if (!usagePageAvailable) {
@@ -697,6 +733,10 @@ public final class MainActivity extends Activity {
         healthCheckInProgress = false;
         showNotice(message, true);
         renderEndpoints();
+    }
+
+    private boolean pairingActive() {
+        return pairingPreparing || pairingSession != null || pendingPairing != null;
     }
 
     private void showNotice(String message, boolean error) {
@@ -746,6 +786,8 @@ public final class MainActivity extends Activity {
             use.setOnClickListener(view -> {
                 attemptedBases.clear();
                 pendingPairing = null;
+                pairingSession = null;
+                pairingPreparing = false;
                 List<String> candidate = new ArrayList<>();
                 candidate.add(base);
                 probeAndLoad(candidate, "That desktop could not be reached.");
@@ -990,9 +1032,13 @@ public final class MainActivity extends Activity {
             super.onReceivedError(view, request, error);
             if (!request.isForMainFrame()) return;
             mainFrameFailed = true;
-            String reason = "Could not reach the desktop: " + error.getDescription();
+            String reason = error.getErrorCode() == WebViewClient.ERROR_HOST_LOOKUP
+                    && pendingPairing != null
+                    && pendingPairing.baseUrl.contains(".ts.net/")
+                    ? "Tailscale is not connected on this phone. Open Tailscale, connect it, and try again."
+                    : "Could not reach the desktop: " + error.getDescription();
             if (loadingCachedFallback) cachedEndpointFailed(reason);
-            else if (pendingPairing != null) showSetup(reason);
+            else if (pendingPairing != null) pairingFailed(reason);
             else view.post(() -> tryNextEndpoint(reason));
         }
 
@@ -1005,7 +1051,7 @@ public final class MainActivity extends Activity {
                     ? "Pairing was rejected. Generate a fresh link on the desktop."
                     : "The desktop returned HTTP " + response.getStatusCode() + ".";
             boolean rejected = response.getStatusCode() == 401 || response.getStatusCode() == 403;
-            if (pendingPairing != null) showSetup(reason);
+            if (pendingPairing != null) pairingFailed(reason);
             else if (rejected) handleConnectionFailure(currentBase, reason, true);
             else if (loadingCachedFallback) cachedEndpointFailed(reason);
             else view.post(() -> tryNextEndpoint(reason));
@@ -1017,7 +1063,7 @@ public final class MainActivity extends Activity {
             mainFrameFailed = true;
             String reason = "The desktop certificate could not be verified.";
             if (loadingCachedFallback) cachedEndpointFailed(reason);
-            else if (pendingPairing != null) showSetup(reason);
+            else if (pendingPairing != null) pairingFailed(reason);
             else view.post(() -> tryNextEndpoint(reason));
         }
 

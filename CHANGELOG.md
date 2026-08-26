@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.4 — 2026-08-26
+
+- Made multi-route phone pairing succeed when either LAN or Tailscale works instead of reporting a global error after one route has already paired.
+- Made pairing retries skip saved routes whose authenticated health check already passes, preserving the remaining one-time token use for an unpaired route.
+- Added actionable Android Tailscale DNS guidance and made desktop Tailscale Serve setup non-interactive, verified, and advertised only when it targets the active companion port.
+
 ## 0.4.3 — 2026-08-25
 
 - Kept very dark account colors legible in quota bars on desktop and phone while preserving the chosen color for account indicators.
