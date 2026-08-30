@@ -1449,6 +1449,7 @@ fn snapshot(
 ) -> UsageSnapshot {
     UsageSnapshot {
         email,
+        plan_type: None,
         bucket_name: bucket_name.map(str::to_string),
         windows,
         reset_available_count: 0,

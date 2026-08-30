@@ -72,6 +72,7 @@ struct MobileSnapshot {
     usage_bar_custom_color: String,
     always_show_reset_counter: bool,
     show_banked_resets: bool,
+    show_plan_badges: bool,
     accounts: Vec<MobileAccount>,
 }
 
@@ -84,6 +85,8 @@ struct MobileAccount {
     color: String,
     email: String,
     masked_email: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    plan_name: Option<String>,
     pin_short: bool,
     expanded: bool,
     error: Option<String>,
@@ -389,6 +392,7 @@ async fn api_state(State(state): State<MobileServerState>, headers: HeaderMap) -
         usage_bar_custom_color: config.usage_bar_custom_color,
         always_show_reset_counter: config.always_show_reset_counter,
         show_banked_resets: config.show_banked_resets,
+        show_plan_badges: config.show_plan_badges,
         accounts,
     };
     let mut response = Json(snapshot).into_response();
@@ -471,12 +475,14 @@ fn mobile_account(key: usize, account: AccountRecord) -> MobileAccount {
         .snapshot
         .unwrap_or_else(|| crate::domain::UsageSnapshot {
             email: None,
+            plan_type: None,
             bucket_name: None,
             windows: Vec::new(),
             reset_available_count: 0,
             reset_credits: Vec::new(),
         });
     let email = snapshot.email.clone().unwrap_or_default();
+    let plan_name = crate::ui_model::plan_display_name(snapshot.plan_type.as_deref());
     let reset_credits = snapshot
         .reset_credits
         .iter()
@@ -504,6 +510,7 @@ fn mobile_account(key: usize, account: AccountRecord) -> MobileAccount {
         color: account.color_name,
         masked_email: crate::ui_model::mask_email(&email),
         email,
+        plan_name: (!plan_name.is_empty()).then_some(plan_name),
         pin_short: account.pin_short,
         expanded: account.expanded,
         error: account.last_error,
@@ -740,15 +747,17 @@ fn static_response(
 mod tests {
     use super::{
         MobileServerState, constant_time_eq, create_pairing, device_is_active,
-        forwarded_over_https, make_device_sessions_persistent, migrate_legacy_access,
+        forwarded_over_https, make_device_sessions_persistent, migrate_legacy_access, mobile_account,
         normalized_cookie_path, parse_bind_address, router,
     };
     use crate::WorkerCommand;
     use crate::config::AppConfig;
+    use crate::domain::{AccountRecord, UsageSnapshot};
     use axum::body::Body;
     use axum::http::header::{CACHE_CONTROL, RETRY_AFTER, SET_COOKIE};
     use axum::http::{HeaderMap, HeaderValue, Request, StatusCode};
     use http_body_util::BodyExt;
+    use std::path::PathBuf;
     use std::sync::atomic::AtomicBool;
     use std::sync::{Arc, Mutex};
     use tokio::sync::mpsc::unbounded_channel;
@@ -759,6 +768,35 @@ mod tests {
         assert!(constant_time_eq(b"same", b"same"));
         assert!(!constant_time_eq(b"same", b"diff"));
         assert!(!constant_time_eq(b"short", b"longer"));
+    }
+
+    #[test]
+    fn phone_accounts_include_the_authoritative_display_plan() {
+        let account = mobile_account(0, AccountRecord {
+            id: "openai:test".into(),
+            home: PathBuf::new(),
+            provider_id: "openai".into(),
+            display_name: "Test".into(),
+            color_name: "cyan".into(),
+            enabled: true,
+            pin_short: false,
+            expanded: false,
+            name_revealed: false,
+            email_revealed: false,
+            confirm_credit_id: String::new(),
+            snapshot: Some(UsageSnapshot {
+                email: Some("test@example.com".into()),
+                plan_type: Some("free".into()),
+                bucket_name: None,
+                windows: Vec::new(),
+                reset_available_count: 0,
+                reset_credits: Vec::new(),
+            }),
+            last_error: None,
+        });
+
+        assert_eq!(account.plan_name.as_deref(), Some("Free"));
+        assert!(serde_json::to_string(&account).unwrap().contains("\"plan_name\":\"Free\""));
     }
 
     #[test]

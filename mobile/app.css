@@ -130,6 +130,30 @@ h1 {
   white-space: nowrap;
 }
 
+.plan-badge {
+  flex: 0 0 auto;
+  max-width: 84px;
+  overflow: hidden;
+  padding: 2px 7px;
+  border: 1px solid #565a61;
+  border-radius: 999px;
+  color: #f3f3f3c7;
+  background: #ffffff0a;
+  font-size: 9.5px;
+  font-weight: 650;
+  line-height: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plan-badge.plan-free { background: #3f4650; }
+.plan-badge.plan-go { background: #075985; }
+.plan-badge.plan-pro { background: #5b3b88; }
+.plan-badge.plan-team { background: #8a4b18; }
+.plan-badge.plan-business { background: #17603a; }
+.plan-badge.plan-enterprise { background: #7f2935; }
+.plan-badge.plan-edu { background: #766214; }
+
 .email-button {
   min-width: 0;
   flex: 1;

@@ -379,6 +379,7 @@ impl AppServerSession {
 
 fn normalize_snapshot(account: Value, limits: Value) -> Result<UsageSnapshot, CodexError> {
     let email = account_email(&account);
+    let plan_type = account_plan_type(&account);
     let (bucket_name, windows) = normalize_windows(&limits);
     if windows.is_empty() {
         return Err(CodexError::Protocol("account/rateLimits/read returned no usable windows".into()));
@@ -387,11 +388,23 @@ fn normalize_snapshot(account: Value, limits: Value) -> Result<UsageSnapshot, Co
     let (reset_available_count, reset_credits) = normalize_reset_credits(&limits);
     Ok(UsageSnapshot {
         email,
+        plan_type,
         bucket_name,
         windows,
         reset_available_count,
         reset_credits,
     })
+}
+
+fn account_plan_type(account: &Value) -> Option<String> {
+    account
+        .get("account")
+        .and_then(Value::as_object)
+        .and_then(|value| value.get("planType"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_ascii_lowercase)
 }
 
 fn account_email(account: &Value) -> Option<String> {
@@ -464,7 +477,7 @@ fn normalize_reset_credits(result: &Value) -> (u32, Vec<ResetCredit>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{account_email, CodexError};
+    use super::{account_email, account_plan_type, CodexError};
     use serde_json::json;
 
     fn rpc(message: &str) -> CodexError {
@@ -509,5 +522,6 @@ mod tests {
             account_email(&account).as_deref(),
             Some("Moved.Account@Example.com")
         );
+        assert_eq!(account_plan_type(&account).as_deref(), Some("plus"));
     }
 }

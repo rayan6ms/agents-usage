@@ -907,6 +907,7 @@ fn render_ui(
     ui.set_usage_bar_custom_color(ui_model::color_from_name(&cfg.usage_bar_custom_color));
     ui.set_always_show_reset_counter(cfg.always_show_reset_counter);
     ui.set_show_banked_resets(cfg.show_banked_resets);
+    ui.set_show_plan_badges(cfg.show_plan_badges);
     ui.set_mobile_enabled(cfg.mobile.enabled);
     ui.set_mobile_allow_lan(cfg.mobile.allows_lan());
     if !cfg.mobile.enabled {
@@ -1536,6 +1537,7 @@ async fn discover_new_accounts(
                 if let Some(email) = identity_email {
                     let snapshot = cached_snapshot.unwrap_or_else(|| UsageSnapshot {
                         email: Some(email.clone()),
+                        plan_type: None,
                         bucket_name: None,
                         windows: Vec::new(),
                         reset_available_count: 0,
@@ -1559,6 +1561,7 @@ async fn discover_new_accounts(
                 }
                 let snapshot = UsageSnapshot {
                     email: None,
+                    plan_type: None,
                     bucket_name: Some(providers::display_name(&candidate.provider_id).into()),
                     windows: Vec::new(),
                     reset_available_count: 0,
@@ -2546,6 +2549,20 @@ fn main() -> Result<(), slint::PlatformError> {
         let config_arc = config.clone();
         let last_anchor = last_anchor_shared.clone();
         let tx = tx.clone();
+        ui.on_show_plan_badges_changed(move |value| {
+            if let Ok(mut cfg) = config_arc.lock() {
+                cfg.show_plan_badges = value;
+            }
+            if let Some(ui) = ui_weak.upgrade() { render_ui(&ui, &accounts, &config_arc, &last_anchor, None); }
+            send(&tx, WorkerCommand::PersistSettings);
+        });
+    }
+    {
+        let ui_weak = ui.as_weak();
+        let accounts = accounts.clone();
+        let config_arc = config.clone();
+        let last_anchor = last_anchor_shared.clone();
+        let tx = tx.clone();
         ui.on_blur_names_changed(move |value| {
             if let Ok(mut cfg) = config_arc.lock() { cfg.blur_names = value; }
             if let Some(ui) = ui_weak.upgrade() { render_ui(&ui, &accounts, &config_arc, &last_anchor, None); }
@@ -2643,26 +2660,6 @@ fn main() -> Result<(), slint::PlatformError> {
             if let Some(ui) = ui_weak.upgrade() { render_ui(&ui, &accounts, &config_arc, &last_anchor, None); }
             send(&tx, WorkerCommand::PersistSettings);
             if value { send(&tx, WorkerCommand::Refresh); }
-        });
-    }
-    {
-        let ui_weak = ui.as_weak();
-        let accounts = accounts.clone();
-        let config_arc = config.clone();
-        let last_anchor = last_anchor_shared.clone();
-        let tx = tx.clone();
-        ui.on_account_pin_short_changed(move |id, value| {
-            let home = if let Ok(mut records) = accounts.lock() {
-                records.iter_mut().find(|record| record.id == id.as_str()).map(|record| {
-                    record.pin_short = value;
-                    (record.provider_id.clone(), record.home.clone())
-                })
-            } else { None };
-            if let Some((provider_id, home)) = home {
-                if let Ok(mut cfg) = config_arc.lock() { config::preference_for_provider_mut(&mut cfg, &provider_id, &home).pin_short = value; }
-            }
-            if let Some(ui) = ui_weak.upgrade() { render_ui(&ui, &accounts, &config_arc, &last_anchor, None); }
-            send(&tx, WorkerCommand::PersistSettings);
         });
     }
     {
@@ -2933,6 +2930,7 @@ mod tests {
         let email = "same@example.com";
         let snapshot = UsageSnapshot {
             email: Some(email.into()),
+            plan_type: Some("plus".into()),
             bucket_name: Some("codex".into()),
             windows: Vec::new(),
             reset_available_count: 0,
@@ -3036,6 +3034,7 @@ mod tests {
         let preference = AccountPreference { home: root.clone(), ..AccountPreference::default() };
         let snapshot = UsageSnapshot {
             email: Some("cached@example.com".into()),
+            plan_type: Some("free".into()),
             bucket_name: Some("codex".into()),
             windows: Vec::new(),
             reset_available_count: 0,

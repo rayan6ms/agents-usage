@@ -22,6 +22,8 @@ pub struct ResetCredit {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct UsageSnapshot {
     pub email: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_type: Option<String>,
     pub bucket_name: Option<String>,
     pub windows: Vec<RateWindow>,
     pub reset_available_count: u32,

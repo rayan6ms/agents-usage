@@ -11,6 +11,7 @@ pub const PANEL_MAX_HEIGHT: f32 = 680.0;
 
 pub fn account_view(record: &AccountRecord, enabled_count: usize, show_banked_resets: bool) -> AccountView {
     let snapshot = record.snapshot.as_ref();
+    let plan_name = plan_display_name(snapshot.and_then(|value| value.plan_type.as_deref()));
     let mut windows: Vec<&RateWindow> = snapshot
         .map(|snapshot| snapshot.windows.iter().collect())
         .unwrap_or_default();
@@ -34,13 +35,16 @@ pub fn account_view(record: &AccountRecord, enabled_count: usize, show_banked_re
     };
     let show_accent = enabled_count > 1;
 
-    let pin_short = record.pin_short && short.is_some();
+    // The account chevron is the single control for revealing the short
+    // (5-hour) window. Keep the legacy preference field readable for config
+    // compatibility, but derive the rendered state from the row expansion.
+    let show_short = record.expanded && short.is_some();
     let detail_windows = windows
         .iter()
         .copied()
         .filter(|window| {
             !(long.is_some_and(|main| std::ptr::eq(*window, main))
-                || pin_short && short.is_some_and(|pinned| std::ptr::eq(*window, pinned)))
+                || show_short && short.is_some_and(|pinned| std::ptr::eq(*window, pinned)))
         })
         .collect::<Vec<_>>();
     let mut reset_count = 0;
@@ -72,7 +76,8 @@ pub fn account_view(record: &AccountRecord, enabled_count: usize, show_banked_re
 
     let has_long_reset = long.and_then(|window| window.resets_at).is_some();
     let has_short_reset = short.and_then(|window| window.resets_at).is_some();
-    let has_hidden_details = !detail_windows.is_empty()
+    let has_hidden_details = short.is_some()
+        || !detail_windows.is_empty()
         || has_long_reset
         || has_short_reset
         || reset_count > 0;
@@ -84,7 +89,7 @@ pub fn account_view(record: &AccountRecord, enabled_count: usize, show_banked_re
     };
     let target_detail_height = detail_target_height(detail_windows.len(), reset_count > 0, credits.len());
     let row_height = 53.0
-        + if pin_short { 20.0 } else { 0.0 }
+        + if show_short { 20.0 } else { 0.0 }
         + if record.last_error.is_some() && long.is_some() { 18.0 } else { 0.0 }
         + detail_height;
 
@@ -106,10 +111,11 @@ pub fn account_view(record: &AccountRecord, enabled_count: usize, show_banked_re
         usage_color,
         email: record.email().into(),
         masked_email: mask_email(record.email()).into(),
+        has_plan: !plan_name.is_empty(),
+        plan_name: plan_name.into(),
         accent,
         show_accent,
         enabled: record.enabled,
-        pin_short,
         expanded: record.expanded,
         name_revealed: record.name_revealed,
         email_revealed: record.email_revealed,
@@ -157,6 +163,34 @@ pub fn account_view(record: &AccountRecord, enabled_count: usize, show_banked_re
         has_hidden_details,
         detail_height_px: target_detail_height,
         row_height_px: row_height,
+    }
+}
+
+pub fn plan_display_name(plan_type: Option<&str>) -> String {
+    let Some(plan_type) = plan_type.map(str::trim).filter(|value| !value.is_empty()) else {
+        return String::new();
+    };
+    match plan_type.to_ascii_lowercase().as_str() {
+        "free" => "Free".into(),
+        "go" => "Go".into(),
+        "plus" => "Plus".into(),
+        "pro" => "Pro".into(),
+        "team" => "Team".into(),
+        "business" => "Business".into(),
+        "enterprise" => "Enterprise".into(),
+        "edu" | "education" => "Edu".into(),
+        other => other
+            .split(['-', '_', ' '])
+            .filter(|part| !part.is_empty())
+            .map(|part| {
+                let mut characters = part.chars();
+                characters
+                    .next()
+                    .map(|first| first.to_uppercase().chain(characters).collect::<String>())
+                    .unwrap_or_default()
+            })
+            .collect::<Vec<_>>()
+            .join(" "),
     }
 }
 
@@ -384,7 +418,7 @@ pub const ACCOUNT_COLORS: [&str; 10] = [
 
 #[cfg(test)]
 mod tests {
-    use super::{ACCOUNT_COLORS, account_view, color_from_name, format_countdown, format_expiry, is_account_color, mask_account_name, primary_window_index, relative_luminance, reset_timer_color, visible_usage_color};
+    use super::{ACCOUNT_COLORS, account_view, color_from_name, format_countdown, format_expiry, is_account_color, mask_account_name, plan_display_name, primary_window_index, relative_luminance, reset_timer_color, visible_usage_color};
     use crate::domain::{AccountRecord, RateWindow, ResetCredit, UsageSnapshot};
     use chrono::{Local, TimeZone};
     use slint::Model;
@@ -419,6 +453,14 @@ mod tests {
     fn account_name_mask_keeps_only_a_hint() {
         assert_eq!(mask_account_name("Work"), "W•••");
         assert_eq!(mask_account_name(""), "");
+    }
+
+    #[test]
+    fn plan_names_are_compact_and_unknown_values_remain_truthful() {
+        assert_eq!(plan_display_name(Some("free")), "Free");
+        assert_eq!(plan_display_name(Some("PLUS")), "Plus");
+        assert_eq!(plan_display_name(Some("future_tier")), "Future Tier");
+        assert_eq!(plan_display_name(None), "");
     }
 
     #[test]
@@ -480,6 +522,7 @@ mod tests {
             confirm_credit_id: String::new(),
             snapshot: Some(UsageSnapshot {
                 email: None,
+                plan_type: Some("free".into()),
                 bucket_name: None,
                 windows: Vec::new(),
                 reset_available_count: 0,

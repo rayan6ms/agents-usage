@@ -22,6 +22,8 @@ pub struct AppConfig {
     pub always_show_reset_counter: bool,
     #[serde(default = "default_true")]
     pub show_banked_resets: bool,
+    #[serde(default = "default_true")]
+    pub show_plan_badges: bool,
     #[serde(default)]
     pub codex_executable: Option<PathBuf>,
     #[serde(default)]
@@ -43,6 +45,7 @@ impl Default for AppConfig {
             usage_bar_custom_color: default_usage_bar_custom_color(),
             always_show_reset_counter: false,
             show_banked_resets: true,
+            show_plan_badges: true,
             codex_executable: None,
             additional_codex_homes: Vec::new(),
             accounts: Vec::new(),
@@ -468,6 +471,7 @@ pin_short = false
         assert!(!config.color_reset_timers);
         assert!(!config.always_show_reset_counter);
         assert!(config.show_banked_resets);
+        assert!(config.show_plan_badges);
         assert_eq!(config.usage_bar_color_mode, super::UsageBarColorMode::Account);
         assert_eq!(config.usage_bar_custom_color, "#27bfce");
     }
@@ -541,6 +545,7 @@ port = 3765
             home: "/tmp/example".into(),
             snapshot: UsageSnapshot {
                 email: Some("cached@example.com".into()),
+                plan_type: Some("plus".into()),
                 bucket_name: Some("codex".into()),
                 windows: Vec::new(),
                 reset_available_count: 0,
@@ -550,6 +555,13 @@ port = 3765
         let encoded = serde_json::to_string(&cache).unwrap();
         let restored: Vec<CachedUsage> = serde_json::from_str(&encoded).unwrap();
         assert_eq!(restored[0].snapshot.email.as_deref(), Some("cached@example.com"));
+        assert_eq!(restored[0].snapshot.plan_type.as_deref(), Some("plus"));
         assert!(!encoded.contains("token"));
+
+        let legacy: UsageSnapshot = serde_json::from_str(
+            r#"{"email":"legacy@example.com","bucket_name":"codex","windows":[],"reset_available_count":0,"reset_credits":[]}"#,
+        )
+        .unwrap();
+        assert!(legacy.plan_type.is_none());
     }
 }

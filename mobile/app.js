@@ -177,11 +177,13 @@ function accountHtml(account, accountCount) {
   const alwaysShowResetCounter = latestState.always_show_reset_counter === true;
   const showBankedResets = latestState.show_banked_resets !== false;
   const resetCountValue = Math.max(account.reset_available_count || 0, account.reset_credits.length);
-  const pinShort = account.pin_short && !!shortWindow;
+  const pinShort = isExpanded && !!shortWindow;
   const detailWindows = windows.slice(0, -1).filter((_, index) => !(pinShort && index === 0));
-  const hasDetails = detailWindows.length > 0 || !!longWindow?.resets_at || (showBankedResets && resetCountValue > 0);
+  const hasDetails = !!shortWindow || detailWindows.length > 0 || !!longWindow?.resets_at || (showBankedResets && resetCountValue > 0);
   const shownName = latestState.blur_names && !revealedNames.has(account.key) ? account.masked_display_name : account.display_name;
   const shownEmail = latestState.blur_emails && !revealedEmails.has(account.key) ? account.masked_email : account.email;
+  const planClass = account.plan_name ? ` plan-${account.plan_name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}` : "";
+  const planBadge = latestState.show_plan_badges !== false && account.plan_name ? `<span class="plan-badge${planClass}" aria-label="${escapeHtml(account.plan_name)} plan">${escapeHtml(account.plan_name)}</span>` : "";
   const mainLimit = longWindow ? limitHtml(account, longWindow, isExpanded || alwaysShowResetCounter, accountCount) : `<div class="checking">${escapeHtml(account.error || "Checking usage…")}</div>`;
   const pinned = pinShort ? limitHtml(account, shortWindow, isExpanded || alwaysShowResetCounter, accountCount) : "";
   const detailLimits = isExpanded ? detailWindows.map(window => limitHtml(account, window, true, accountCount)).join("") : "";
@@ -192,6 +194,7 @@ function accountHtml(account, accountCount) {
     <div class="account-head">
       <span class="provider-wrap"><img class="provider-mark" src="${endpoint(`provider-icons/${account.provider_id}`)}" alt="">${accountCount > 1 ? '<span class="accent-dot"></span>' : ""}</span>
       <button class="identity-button" data-action="name" type="button">${escapeHtml(shownName)}</button>
+      ${planBadge}
       <button class="email-button" data-action="email" type="button">${escapeHtml(shownEmail)}</button>
       ${hasDetails ? `<button class="details-button" data-action="details" type="button" aria-label="${isExpanded ? "Hide" : "Show"} account details" aria-expanded="${isExpanded}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg></button>` : ""}
     </div>
@@ -201,7 +204,7 @@ function accountHtml(account, accountCount) {
 
 function render() {
   if (!latestState) return;
-  accountsNode.innerHTML = latestState.accounts.length ? latestState.accounts.map(account => accountHtml(account, latestState.accounts.length)).join("") : '<div class="empty">No enabled agent accounts were found.</div>';
+  accountsNode.innerHTML = latestState.accounts.length ? latestState.accounts.map(account => accountHtml(account, latestState.accounts.length)).join("") : '<div class="empty">No tracked agent accounts were found.</div>';
   const busy = latestState.refreshing || locallyRefreshing;
   refreshButton.classList.toggle("busy", busy);
   refreshButton.disabled = busy;

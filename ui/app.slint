@@ -26,10 +26,11 @@ export struct AccountView {
     usage-color: color,
     email: string,
     masked-email: string,
+    has-plan: bool,
+    plan-name: string,
     accent: color,
     show-accent: bool,
     enabled: bool,
-    pin-short: bool,
     expanded: bool,
     name-revealed: bool,
     email-revealed: bool,
@@ -82,6 +83,51 @@ component AccentDot inherits Rectangle {
     border-color: Palette.border;
     border-width: 1px;
     border-radius: root.width / 2;
+}
+
+component PlanBadge inherits Rectangle {
+    in property <string> text;
+    width: min(78px, max(32px, badge-text.preferred-width + 12px));
+    height: 22px;
+    background: transparent;
+
+    function plan-background(value: string) -> color {
+        if value == "Plus" { return Palette.alternate-background; }
+        if value == "Free" { return #3f4650; }
+        if value == "Go" { return #075985; }
+        if value == "Pro" { return #5b3b88; }
+        if value == "Team" { return #8a4b18; }
+        if value == "Business" { return #17603a; }
+        if value == "Enterprise" { return #7f2935; }
+        if value == "Edu" { return #766214; }
+        return #46505a;
+    }
+
+    pill := Rectangle {
+        x: 0px;
+        y: 3px;
+        width: parent.width;
+        height: 16px;
+        background: root.plan-background(root.text);
+        border-width: 1px;
+        border-color: Palette.border;
+        border-radius: 8px;
+    }
+
+    badge-text := Text {
+        width: parent.width - 10px;
+        height: 16px;
+        y: 3px;
+        x: 5px;
+        text: root.text;
+        color: Palette.foreground;
+        font-size: 8.5px;
+        font-weight: 600;
+        opacity: 0.78;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        overflow: elide;
+    }
 }
 
 component AppSwitch inherits Rectangle {
@@ -555,6 +601,7 @@ component AccountRow inherits Rectangle {
     in property <color> usage-bar-custom-color: #27bfce;
     in property <bool> motion-enabled: true;
     in property <bool> reset-busy: false;
+    in property <bool> show-plan-badges: true;
     callback toggle-details(string);
     callback toggle-name(string);
     callback toggle-email(string);
@@ -616,6 +663,9 @@ component AccountRow inherits Rectangle {
                 TouchArea {
                     clicked => { if (root.blur-names) { root.toggle-name(root.account.id); } }
                 }
+            }
+            if root.show-plan-badges && root.account.has-plan: PlanBadge {
+                text: root.account.plan-name;
             }
             Rectangle {
                 horizontal-stretch: 1;
@@ -690,7 +740,7 @@ component AccountRow inherits Rectangle {
             overflow: elide;
         }
 
-        if root.account.pin-short && root.account.has-short-limit: LimitLine {
+        if root.account.expanded && root.account.has-short-limit: LimitLine {
             label: root.account.short-label;
             remaining: root.account.short-remaining;
             percent-text: root.account.short-percent-text;
@@ -1039,17 +1089,17 @@ component AccountSettings inherits Rectangle {
     in property <[ColorChoice]> colors;
     in property <bool> can-move-up: false;
     in property <bool> can-move-down: false;
+    in property <bool> show-plan-badges: true;
     callback name-changed(string, string);
     callback color-changed(string, string);
     callback custom-color-changed(string, color);
     callback enabled-changed(string, bool);
-    callback pin-short-changed(string, bool);
     callback move-requested(string, int);
     private property <bool> picker-open: false;
     in-out property <float> picker-hue: root.account.account-color.to-hsv().hue;
     in-out property <float> picker-saturation: root.account.account-color.to-hsv().saturation;
     in-out property <float> picker-value: root.account.account-color.to-hsv().value;
-    height: (root.account.has-short-limit ? 167px : 122px) + (root.picker-open ? 98px : 0px);
+    height: 122px + (root.picker-open ? 98px : 0px);
     background: transparent;
 
     VerticalLayout {
@@ -1060,17 +1110,25 @@ component AccountSettings inherits Rectangle {
         Rectangle {
             height: 46px;
             background: transparent;
-            Text {
+            HorizontalLayout {
                 x: 0px;
                 y: 4px;
                 width: parent.width - 122px;
-                height: 20px;
-                text: root.account.display-name;
-                color: Palette.foreground;
-                font-size: 11px;
-                font-weight: 600;
-                vertical-alignment: center;
-                overflow: elide;
+                height: 22px;
+                spacing: 6px;
+                account-name := Text {
+                    width: min(138px, account-name.preferred-width);
+                    text: root.account.display-name;
+                    color: Palette.foreground;
+                    font-size: 11px;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                if root.show-plan-badges && root.account.has-plan: PlanBadge {
+                    text: root.account.plan-name;
+                }
+                Rectangle { horizontal-stretch: 1; background: transparent; }
             }
             Text {
                 x: 0px;
@@ -1086,7 +1144,7 @@ component AccountSettings inherits Rectangle {
             }
             TinyAction {
                 x: parent.width - 116px;
-                y: 12px;
+                y: 7px;
                 width: 25px;
                 text: "↑";
                 active: root.can-move-up;
@@ -1094,7 +1152,7 @@ component AccountSettings inherits Rectangle {
             }
             TinyAction {
                 x: parent.width - 87px;
-                y: 12px;
+                y: 7px;
                 width: 25px;
                 text: "↓";
                 active: root.can-move-down;
@@ -1104,7 +1162,7 @@ component AccountSettings inherits Rectangle {
                 x: parent.width - 42px;
                 y: 7px;
                 width: 38px;
-                label: "Enable " + root.account.display-name;
+                label: "Track " + root.account.display-name + " on desktop and phone";
                 checked: root.account.enabled;
                 toggled => { root.enabled-changed(root.account.id, self.checked); }
             }
@@ -1166,12 +1224,6 @@ component AccountSettings inherits Rectangle {
             saturation: root.picker-saturation;
             value: root.picker-value;
             picked(value) => { root.custom-color-changed(root.account.id, value); }
-        }
-        if root.account.has-short-limit: SettingRow {
-            title: "Show " + root.account.short-label;
-            subtitle: "Keep this window below the main usage bar";
-            checked: root.account.pin-short;
-            changed(value) => { root.pin-short-changed(root.account.id, value); }
         }
     }
 }
@@ -1351,6 +1403,7 @@ export component MainWindow inherits Window {
     in-out property <color> usage-bar-custom-color: #27bfce;
     in-out property <bool> always-show-reset-counter: false;
     in-out property <bool> show-banked-resets: true;
+    in-out property <bool> show-plan-badges: true;
     in-out property <bool> motion-enabled: true;
     in-out property <bool> refreshing: false;
     in-out property <bool> reset-busy: false;
@@ -1385,8 +1438,8 @@ export component MainWindow inherits Window {
     callback usage-bar-custom-color-changed(color);
     callback always-show-reset-counter-changed(bool);
     callback show-banked-resets-changed(bool);
+    callback show-plan-badges-changed(bool);
     callback account-enabled-changed(string, bool);
-    callback account-pin-short-changed(string, bool);
     callback account-name-changed(string, string);
     callback account-color-changed(string, string);
     callback account-custom-color-changed(string, color);
@@ -1501,6 +1554,7 @@ export component MainWindow inherits Window {
                         usage-bar-custom-color: root.usage-bar-custom-color;
                         motion-enabled: root.motion-enabled;
                         reset-busy: root.reset-busy;
+                        show-plan-badges: root.show-plan-badges;
                         toggle-details(id) => { root.account-toggle-details(id); }
                         toggle-name(id) => { root.account-toggle-name(id); }
                         toggle-email(id) => { root.account-toggle-email(id); }
@@ -1589,6 +1643,12 @@ export component MainWindow inherits Window {
                             checked: root.show-banked-resets;
                             changed(value) => { root.show-banked-resets-changed(value); }
                         }
+                        SettingRow {
+                            title: "Show plan badges";
+                            subtitle: "Display each account's plan beside its name";
+                            checked: root.show-plan-badges;
+                            changed(value) => { root.show-plan-badges-changed(value); }
+                        }
                         UsageBarColorSettings {
                             mode: root.usage-bar-color-mode;
                             custom-color: root.usage-bar-custom-color;
@@ -1624,13 +1684,13 @@ export component MainWindow inherits Window {
                         for account[index] in root.accounts: AccountSettings {
                             account: account;
                             colors: root.account-colors;
+                            show-plan-badges: root.show-plan-badges;
                             can-move-up: index > 0;
                             can-move-down: index + 1 < root.accounts.length;
                             name-changed(id, value) => { root.account-name-changed(id, value); }
                             color-changed(id, value) => { root.account-color-changed(id, value); }
                             custom-color-changed(id, value) => { root.account-custom-color-changed(id, value); }
                             enabled-changed(id, value) => { root.account-enabled-changed(id, value); }
-                            pin-short-changed(id, value) => { root.account-pin-short-changed(id, value); }
                             move-requested(id, direction) => { root.account-move-requested(id, direction); }
                         }
 
