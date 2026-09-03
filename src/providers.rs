@@ -62,6 +62,18 @@ impl ProviderError {
             Self::Request { provider, source } if source.is_timeout() => {
                 format!("{provider} did not respond in time; showing the last update")
             }
+            Self::Request { provider, source } if source.status() == Some(StatusCode::TOO_MANY_REQUESTS) => {
+                format!("{provider} temporarily rate-limited usage checks; try again shortly")
+            }
+            Self::Request { provider, source } if source.status().is_some_and(|status| status.is_server_error()) => {
+                format!("{provider} is temporarily unavailable; showing the last update")
+            }
+            Self::Request { provider, source } if source.is_connect() => {
+                format!("Could not reach {provider}; check your connection and try again")
+            }
+            Self::Request { provider, source } if source.is_decode() => {
+                format!("{provider} returned an invalid usage response; showing the last update")
+            }
             Self::Request { provider, .. } => {
                 format!("Could not update {provider}; showing the last update")
             }
@@ -98,7 +110,7 @@ pub fn candidates(config: &AppConfig) -> Vec<ProviderCandidate> {
 
     if let Some(home) = discovery::user_home() {
         let opencode = opencode_data_dir(&home);
-        if has_opencode_go_key(&opencode.join("auth.json")) {
+        if opencode.join("auth.json").is_file() {
             candidates.push(ProviderCandidate {
                 provider_id: OPENCODE.into(),
                 home: opencode,
@@ -142,7 +154,7 @@ pub fn candidates(config: &AppConfig) -> Vec<ProviderCandidate> {
         }
 
         let grok = grok_home(&home);
-        if has_grok_token(&grok.join("auth.json")) {
+        if grok.join("auth.json").is_file() {
             candidates.push(ProviderCandidate {
                 provider_id: XAI.into(),
                 home: grok,
@@ -174,7 +186,7 @@ pub fn candidates(config: &AppConfig) -> Vec<ProviderCandidate> {
 pub fn is_marked(provider_id: &str, home: &Path) -> bool {
     match provider_id {
         OPENAI => discovery::is_marked_codex_home(home),
-        OPENCODE => has_opencode_go_key(&home.join("auth.json")),
+        OPENCODE => home.join("auth.json").is_file(),
         ANTHROPIC => {
             home.join(".credentials.json").is_file() || cfg!(target_os = "macos") && home.is_dir()
         }
@@ -187,7 +199,7 @@ pub fn is_marked(provider_id: &str, home: &Path) -> bool {
             let user_home = home.parent().unwrap_or(home);
             cursor_auth_path(user_home).is_file() || home.is_dir()
         }
-        XAI => has_grok_token(&home.join("auth.json")),
+        XAI => home.join("auth.json").is_file(),
         _ => false,
     }
 }
@@ -226,18 +238,18 @@ fn http_client(provider: &'static str) -> Result<Client, ProviderError> {
 }
 
 fn read_json(path: &Path, label: &str) -> Result<Value, ProviderError> {
-    let text = fs::read_to_string(path)
-        .map_err(|_| ProviderError::Message(format!("{label} sign-in was not found")))?;
+    let text = fs::read_to_string(path).map_err(|error| {
+        let message = match error.kind() {
+            std::io::ErrorKind::NotFound => format!("{label} sign-in was not found · sign in again"),
+            std::io::ErrorKind::PermissionDenied => {
+                format!("{label} sign-in could not be read · check file permissions")
+            }
+            _ => format!("{label} sign-in could not be read")
+        };
+        ProviderError::Message(message)
+    })?;
     serde_json::from_str(&text)
-        .map_err(|_| ProviderError::Message(format!("{label} credentials could not be read")))
-}
-
-fn has_opencode_go_key(path: &Path) -> bool {
-    read_opencode_auth(path)
-        .ok()
-        .and_then(|value| value.get("opencode-go").cloned())
-        .and_then(|value| value.get("key").and_then(Value::as_str).map(str::to_string))
-        .is_some_and(|key| !key.is_empty())
+        .map_err(|_| ProviderError::Message(format!("{label} credentials are invalid · sign in again")))
 }
 
 fn opencode_data_dir(home: &Path) -> PathBuf {
@@ -264,17 +276,10 @@ fn grok_home(home: &Path) -> PathBuf {
         .unwrap_or_else(|| home.join(".grok"))
 }
 
-fn has_grok_token(path: &Path) -> bool {
-    read_json(path, "Grok")
-        .ok()
-        .and_then(|value| select_grok_credential(&value))
-        .is_some()
-}
-
 fn read_opencode_auth(path: &Path) -> Result<Value, ProviderError> {
     if let Some(value) = std::env::var_os("OPENCODE_AUTH_CONTENT") {
         return serde_json::from_str(&value.to_string_lossy())
-            .map_err(|_| ProviderError::Message("OpenCode credentials could not be read".into()));
+            .map_err(|_| ProviderError::Message("OpenCode credentials are invalid · sign in again".into()));
     }
     read_json(path, "OpenCode")
 }
@@ -1559,12 +1564,32 @@ mod tests {
     use super::{
         decode_jwt_claims, decrypt_gemini_credentials, normalize_claude_usage,
         normalize_cursor_usage, normalize_gemini_quota, normalize_grok_usage,
-        normalize_opencode_usage, select_grok_credential, timestamp,
+        normalize_opencode_usage, read_json, select_grok_credential, timestamp,
     };
     use aes_gcm::aead::Aead;
     use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
     use base64::Engine;
     use serde_json::json;
+    use std::fs;
+
+    #[test]
+    fn credential_file_errors_are_specific_and_actionable() {
+        let root = std::env::temp_dir().join(format!("agents-usage-provider-auth-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("auth.json");
+
+        assert_eq!(
+            read_json(&path, "Example").unwrap_err().user_message(),
+            "Example sign-in was not found · sign in again"
+        );
+        fs::write(&path, b"not json").unwrap();
+        assert_eq!(
+            read_json(&path, "Example").unwrap_err().user_message(),
+            "Example credentials are invalid · sign in again"
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn claude_current_and_scoped_windows_are_normalized() {

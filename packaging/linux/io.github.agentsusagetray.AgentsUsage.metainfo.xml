@@ -12,6 +12,16 @@
     <binary>agents-usage</binary>
   </provides>
   <releases>
+    <release version="0.4.6" date="2026-09-03">
+      <description>
+        <p>Adds truthful, actionable provider error feedback and substantially faster phone companion refreshes.</p>
+      </description>
+    </release>
+    <release version="0.4.5" date="2026-08-30">
+      <description>
+        <p>Adds provider plan badges and improves account controls.</p>
+      </description>
+    </release>
     <release version="0.4.4" date="2026-08-26">
       <description>
         <p>Fixes resilient LAN and Tailscale phone pairing, retry token use, and verified Tailscale Serve setup.</p>

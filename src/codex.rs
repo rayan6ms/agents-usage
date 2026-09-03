@@ -2,6 +2,7 @@ use crate::discovery::user_home;
 use crate::domain::{RateWindow, ResetCredit, UsageSnapshot};
 use serde_json::{Value, json};
 use std::collections::hash_map::DefaultHasher;
+use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -41,6 +42,12 @@ impl CodexError {
             Self::Io(_) | Self::Timeout(_) | Self::Exited(_) => true,
             Self::Rpc { message, .. } => {
                 let lower = message.to_ascii_lowercase();
+                if ["500", "502", "503", "504"]
+                    .iter()
+                    .any(|status| contains_http_status(&lower, status))
+                {
+                    return true;
+                }
                 [
                     "503 service unavailable",
                     "502 bad gateway",
@@ -63,26 +70,69 @@ impl CodexError {
         match self {
             Self::Rpc { message, .. } => {
                 let lower = message.to_ascii_lowercase();
-                if lower.contains("401 unauthorized")
+                // Authentication failures must win over quota wording. Some
+                // App Server versions mention rate-limit data while reporting
+                // that auth.json is missing or unusable.
+                if [
+                    "auth.json",
+                    "authentication required",
+                    "authentication",
+                    "authorization",
+                    "not authenticated",
+                    "unauthenticated",
+                    "login required",
+                    "not logged in",
+                    "sign in required",
+                    "credential",
+                    "auth file",
+                ]
+                .iter()
+                .any(|needle| lower.contains(needle))
+                {
+                    "Codex sign-in is missing or invalid · check auth.json or log in again"
+                } else if lower.contains("401 unauthorized")
                     || lower.contains("token_revoked")
                     || lower.contains("invalidated oauth token")
                 {
                     "Sign-in expired · log in to this account again"
-                } else if lower.contains("429 too many requests") || lower.contains("rate limit") {
+                } else if contains_http_status(&lower, "429")
+                    || lower.contains("429 too many requests")
+                    || lower.contains("too many requests")
+                    || lower.contains("rate limit exceeded")
+                    || lower.contains("rate_limit_exceeded")
+                {
                     "Service rate-limited · try again shortly"
-                } else if self.is_transient_read() {
+                } else if [
+                    "internal server error",
+                    "service unavailable",
+                    "bad gateway",
+                    "gateway timeout",
+                ]
+                .iter()
+                .any(|needle| lower.contains(needle))
+                    || self.is_transient_read()
+                {
                     "Temporary service error · keeping last data"
                 } else {
-                    "Account service rejected the refresh"
+                    "Could not read usage data · keeping last data"
                 }
             }
             Self::Io(_) | Self::Timeout(_) | Self::Exited(_) => {
                 "Temporary service error · keeping last data"
             }
             Self::NotFound | Self::Spawn(_) => "Codex could not be started for this account",
+            Self::Protocol(message) if message.to_ascii_lowercase().contains("auth.json") => {
+                "Codex sign-in is missing or invalid · check auth.json or log in again"
+            }
             Self::Protocol(_) => "Usage data was not available for this account",
         }
     }
+}
+
+fn contains_http_status(message: &str, status: &str) -> bool {
+    message
+        .split(|character: char| !character.is_ascii_digit())
+        .any(|token| token == status)
 }
 
 fn retry_delay(codex_home: &Path, attempt: usize) -> Duration {
@@ -160,6 +210,7 @@ fn find_on_path(name: &str) -> Option<PathBuf> {
 }
 
 pub async fn read_openai_account(codex: &Path, codex_home: &Path) -> Result<UsageSnapshot, CodexError> {
+    validate_auth_file(codex_home)?;
     let mut last_error = None;
     for attempt in 1..=READ_ATTEMPTS {
         match read_openai_account_once(codex, codex_home).await {
@@ -189,6 +240,21 @@ pub async fn read_openai_account(codex: &Path, codex_home: &Path) -> Result<Usag
         }
     }
     Err(last_error.expect("read retry loop always records an error before exhaustion"))
+}
+
+fn validate_auth_file(codex_home: &Path) -> Result<(), CodexError> {
+    let path = codex_home.join("auth.json");
+    let text = fs::read_to_string(&path).map_err(|error| {
+        let detail = match error.kind() {
+            std::io::ErrorKind::NotFound => "was not found",
+            std::io::ErrorKind::PermissionDenied => "could not be read (permission denied)",
+            _ => "could not be read",
+        };
+        CodexError::Protocol(format!("Codex auth.json {detail}"))
+    })?;
+    serde_json::from_str::<Value>(&text)
+        .map_err(|_| CodexError::Protocol("Codex auth.json is invalid".into()))?;
+    Ok(())
 }
 
 pub async fn read_openai_identity(
@@ -477,8 +543,9 @@ fn normalize_reset_credits(result: &Value) -> (u32, Vec<ResetCredit>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{account_email, account_plan_type, CodexError};
+    use super::{account_email, account_plan_type, validate_auth_file, CodexError};
     use serde_json::json;
+    use std::fs;
 
     fn rpc(message: &str) -> CodexError {
         CodexError::Rpc {
@@ -506,6 +573,42 @@ mod tests {
         let error = rpc("503 Service Unavailable: retry later");
         assert!(error.is_transient_read());
         assert_eq!(error.user_message(), "Temporary service error · keeping last data");
+    }
+
+    #[test]
+    fn auth_file_failures_are_not_reported_as_rate_limits() {
+        let error = rpc("could not read auth.json: rate limit data is unavailable");
+        assert_eq!(
+            error.user_message(),
+            "Codex sign-in is missing or invalid · check auth.json or log in again"
+        );
+    }
+
+    #[test]
+    fn generic_server_errors_are_temporary() {
+        let error = rpc("500 Internal Server Error");
+        assert_eq!(error.user_message(), "Temporary service error · keeping last data");
+    }
+
+    #[test]
+    fn missing_and_invalid_auth_files_have_auth_specific_feedback() {
+        let home = std::env::temp_dir().join(format!("agents-usage-auth-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&home).unwrap();
+
+        let missing = validate_auth_file(&home).unwrap_err();
+        assert_eq!(
+            missing.user_message(),
+            "Codex sign-in is missing or invalid · check auth.json or log in again"
+        );
+
+        fs::write(home.join("auth.json"), b"not json").unwrap();
+        let invalid = validate_auth_file(&home).unwrap_err();
+        assert_eq!(
+            invalid.user_message(),
+            "Codex sign-in is missing or invalid · check auth.json or log in again"
+        );
+
+        fs::remove_dir_all(home).unwrap();
     }
 
     #[test]

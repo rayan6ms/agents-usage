@@ -33,7 +33,9 @@ const DBUS_PATH: &str = "/io/github/agentsusagetray/App";
 const PANEL_GAP_PX: i32 = 6;
 const SCREEN_MARGIN_PX: i32 = 5;
 const OPEN_REFRESH_FRESHNESS: Duration = Duration::from_secs(5);
-const MOBILE_REFRESH_FRESHNESS: Duration = Duration::from_secs(30);
+// Keep the phone's automatic refresh window aligned with the desktop panel so
+// reopening the companion does not intentionally show older data.
+const MOBILE_REFRESH_FRESHNESS: Duration = Duration::from_secs(5);
 const MAX_RPC_CONCURRENCY: usize = 8;
 const INTERACTIVE_REFRESH_CONCURRENCY: usize = 8;
 const INTERACTIVE_DISCOVERY_CONCURRENCY: usize = 2;
@@ -1263,7 +1265,9 @@ fn placeholder_record(
     index: usize,
     cached_snapshot: Option<UsageSnapshot>,
 ) -> Option<AccountRecord> {
-    if !providers::is_marked(&pref.provider_id, &pref.home) { return None; }
+    // Keep saved accounts visible even when their credential file disappears.
+    // The next refresh can then explain the missing/invalid sign-in instead of
+    // silently dropping the account (or mislabeling it as rate-limited).
     Some(AccountRecord {
         id: account_id(&pref.provider_id, &pref.home),
         home: pref.home.clone(),

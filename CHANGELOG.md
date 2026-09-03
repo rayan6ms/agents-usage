@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.4.6 — 2026-09-03
+
+- Report missing, unreadable, expired, or invalid provider credentials separately from genuine rate limits, with actionable recovery guidance.
+- Distinguish provider timeouts, connection failures, malformed responses, and temporary server errors while preserving the last valid usage snapshot.
+- Keep saved accounts visible when credentials disappear so their authentication failure can be explained instead of silently dropping the account.
+- Refresh the phone companion more quickly with adaptive polling, shorter background checks, desktop-equivalent freshness, accessible error announcements, and a new service-worker cache.
+
+## 0.4.5 — 2026-08-30
+
+- Added provider-supplied plan badges to desktop and phone account rows with a setting to hide them.
+- Improved account controls, layout behavior, and Codex authentication feedback.
+
 ## 0.4.4 — 2026-08-26
 
 - Made multi-route phone pairing succeed when either LAN or Tailscale works instead of reporting a global error after one route has already paired.

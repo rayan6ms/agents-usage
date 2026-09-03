@@ -15,6 +15,10 @@ let lastSuccess = 0;
 let locallyRefreshing = false;
 let requestInFlight = false;
 let resumedAt = Date.now();
+let refreshPollTimer = null;
+let refreshPollActive = false;
+let refreshPollAttempt = 0;
+let refreshPollSawBusy = false;
 
 
 function endpoint(path) { return new URL(`./${path}`, window.location.href); }
@@ -22,6 +26,46 @@ function escapeHtml(value) { return String(value ?? "").replace(/[&<>"']/g, char
 
 function validState(value) {
   return value && typeof value === "object" && Array.isArray(value.accounts) && Number.isFinite(value.server_time);
+}
+
+async function httpError(response, fallback) {
+  let detail = "";
+  try { detail = (await response.text()).trim(); } catch (_) {}
+  // Avoid showing an HTML proxy page or an unbounded server response in the
+  // compact phone notice. Plain-text API errors remain useful and actionable.
+  if (detail.length > 180 || /<[^>]+>/.test(detail)) detail = "";
+  if (response.status === 429) return `${fallback} Please wait a moment and try again.`;
+  if (detail) return `${fallback} ${detail}`;
+  return `${fallback} (HTTP ${response.status}).`;
+}
+
+function stopRefreshPolling() {
+  if (refreshPollTimer !== null) {
+    clearTimeout(refreshPollTimer);
+    refreshPollTimer = null;
+  }
+  refreshPollActive = false;
+  refreshPollAttempt = 0;
+  refreshPollSawBusy = false;
+}
+
+function scheduleRefreshPoll(delay = 250) {
+  refreshPollActive = true;
+  if (refreshPollTimer !== null) return;
+  refreshPollTimer = setTimeout(async () => {
+    refreshPollTimer = null;
+    refreshPollAttempt += 1;
+    await loadState({quiet: true});
+    if (latestState?.refreshing === true) refreshPollSawBusy = true;
+    const continuePolling = refreshPollAttempt < 4 || refreshPollSawBusy;
+    if (continuePolling && (!refreshPollSawBusy || latestState?.refreshing !== false) && refreshPollAttempt < 20) {
+      scheduleRefreshPoll(Math.min(250 + refreshPollAttempt * 200, 2000));
+      return;
+    }
+    locallyRefreshing = false;
+    stopRefreshPolling();
+    render();
+  }, delay);
 }
 
 function restoreCachedState() {
@@ -220,13 +264,13 @@ async function loadState({quiet = false} = {}) {
       clearCachedState();
       throw new Error("This phone is not paired. Open the private pairing link again.");
     }
-    if (!response.ok) throw new Error(`Desktop returned ${response.status}.`);
+    if (!response.ok) throw new Error(await httpError(response, "Desktop could not provide usage."));
     const state = await response.json();
     if (!validState(state)) throw new Error("Desktop returned an invalid usage update.");
     latestState = state;
     lastSuccess = Date.now();
     cacheState(latestState);
-    if (!latestState.refreshing) locallyRefreshing = false;
+    if (!latestState.refreshing && !refreshPollActive) locallyRefreshing = false;
     noticeNode.hidden = true;
     statusNode.className = "live-status online";
     statusNode.setAttribute("aria-label", "Connected to desktop");
@@ -237,7 +281,7 @@ async function loadState({quiet = false} = {}) {
     statusNode.setAttribute("aria-label", "Desktop unavailable");
     noticeNode.textContent = error.message || "Desktop unavailable.";
     noticeNode.hidden = false;
-    locallyRefreshing = false;
+    if (!refreshPollActive) locallyRefreshing = false;
     refreshButton.classList.remove("busy");
     refreshButton.disabled = false;
     if (latestState) updatedNode.textContent = lastUpdateText("Desktop unavailable · last updated");
@@ -248,7 +292,9 @@ async function loadState({quiet = false} = {}) {
 }
 
 async function refreshUsage() {
+  stopRefreshPolling();
   locallyRefreshing = true;
+  refreshPollAttempt = 0;
   render();
   try {
     const response = await fetch(endpoint("api/refresh"), {method:"POST", cache:"no-store", credentials:"same-origin"});
@@ -256,10 +302,13 @@ async function refreshUsage() {
       clearCachedState();
       throw new Error("This phone is not paired. Open the private pairing link again.");
     }
-    if (!response.ok) throw new Error(`Refresh failed (${response.status}).`);
-    setTimeout(() => loadState(), 500);
-    setTimeout(() => loadState(), 1600);
+    if (!response.ok) throw new Error(await httpError(response, "Refresh failed."));
+    // The desktop accepts the command asynchronously. Poll quickly while it
+    // runs so the phone reflects each account as soon as it is available,
+    // instead of waiting for the normal background poll.
+    scheduleRefreshPoll();
   } catch (error) {
+    stopRefreshPolling();
     locallyRefreshing = false;
     noticeNode.textContent = error.message;
     noticeNode.hidden = false;
@@ -304,7 +353,7 @@ setInterval(() => {
   if (statusNode.classList.contains("offline")) updatedNode.textContent = lastUpdateText("Desktop unavailable · last updated");
   else updatedNode.textContent = lastUpdateText("Connected to desktop · checked");
 }, 1000);
-setInterval(() => { if (document.visibilityState === "visible") loadState({quiet:true}); }, 10000);
+setInterval(() => { if (document.visibilityState === "visible") loadState({quiet:true}); }, 2500);
 
 if (restoreCachedState()) {
   statusNode.className = "live-status offline";
