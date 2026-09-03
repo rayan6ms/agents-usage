@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.7 — 2026-09-03
+
+- Remove the trailing account separator from the final visible row on desktop and phone views.
+
 ## 0.4.6 — 2026-09-03
 
 - Report missing, unreadable, expired, or invalid provider credentials separately from genuine rate limits, with actionable recovery guidance.

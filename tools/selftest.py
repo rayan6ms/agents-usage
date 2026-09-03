@@ -99,6 +99,7 @@ assert 'account-move-requested' in ui
 assert 'settings-height-px' in ui
 assert 'vertical-scrollbar-policy: as-needed' in ui
 assert 'if root.enabled-account-count > 0: DashboardScrollView' in ui
+assert 'root.account.show-separator ? 1px : 0px' in ui
 assert 'title: "Show banked resets"' in ui
 assert 'padding-top: 8px' in ui
 assert 'Personal' not in ui and 'team@anthropic.example' not in ui
@@ -106,6 +107,7 @@ assert 'StatusNotifierTray' in main and 'create_native_tray' in main
 assert 'MoveFileExW' in (root / 'src/config.rs').read_text()
 assert '<span class="reset-text"> • resets in <span class="reset-timer ' in mobile_js
 assert '.reset-timer.colored' in mobile_css and '.reset-text.colored' not in mobile_css
+assert '.account:last-child { border-bottom: 0; }' in mobile_css
 assert 'always_show_reset_counter' in mobile_js and 'pin_short_global' not in mobile_js
 assert 'show_banked_resets' in mobile_js
 assert 'STATE_CACHE_KEY' in mobile_js and 'restoreCachedState' in mobile_js

@@ -9,7 +9,12 @@ pub const PANEL_BOTTOM_PADDING: f32 = 17.0;
 pub const EMPTY_CONTENT_HEIGHT: f32 = 72.0;
 pub const PANEL_MAX_HEIGHT: f32 = 680.0;
 
-pub fn account_view(record: &AccountRecord, enabled_count: usize, show_banked_resets: bool) -> AccountView {
+pub fn account_view(
+    record: &AccountRecord,
+    enabled_count: usize,
+    show_banked_resets: bool,
+    show_separator: bool,
+) -> AccountView {
     let snapshot = record.snapshot.as_ref();
     let plan_name = plan_display_name(snapshot.and_then(|value| value.plan_type.as_deref()));
     let mut windows: Vec<&RateWindow> = snapshot
@@ -161,6 +166,7 @@ pub fn account_view(record: &AccountRecord, enabled_count: usize, show_banked_re
         reset_count_text: if reset_count == 1 { "1 available".into() } else { format!("{reset_count} available").into() },
         reset_credits: Rc::new(VecModel::from(credits)).into(),
         has_hidden_details,
+        show_separator,
         detail_height_px: target_detail_height,
         row_height_px: row_height,
     }
@@ -202,16 +208,21 @@ pub fn panel_height(records: &[AccountRecord], show_banked_resets: bool) -> f32 
     let rows = records
         .iter()
         .filter(|record| record.enabled)
-        .map(|record| account_view(record, enabled_count, show_banked_resets).row_height_px)
+        .map(|record| account_view(record, enabled_count, show_banked_resets, false).row_height_px)
         .sum::<f32>();
     (PANEL_HEADER_HEIGHT + rows + PANEL_BOTTOM_PADDING).clamp(128.0, PANEL_MAX_HEIGHT)
 }
 
 pub fn model(records: &[AccountRecord], show_banked_resets: bool) -> (ModelRc<AccountView>, usize) {
     let enabled_count = records.iter().filter(|record| record.enabled).count();
+    let last_enabled_index = records.iter().rposition(|record| record.enabled);
     let rows = records
         .iter()
-        .map(|record| account_view(record, enabled_count, show_banked_resets))
+        .enumerate()
+        .map(|(index, record)| {
+            let show_separator = record.enabled && Some(index) != last_enabled_index;
+            account_view(record, enabled_count, show_banked_resets, show_separator)
+        })
         .collect::<Vec<_>>();
     (Rc::new(VecModel::from(rows)).into(), enabled_count)
 }
@@ -418,7 +429,7 @@ pub const ACCOUNT_COLORS: [&str; 10] = [
 
 #[cfg(test)]
 mod tests {
-    use super::{ACCOUNT_COLORS, account_view, color_from_name, format_countdown, format_expiry, is_account_color, mask_account_name, plan_display_name, primary_window_index, relative_luminance, reset_timer_color, visible_usage_color};
+    use super::{ACCOUNT_COLORS, account_view, color_from_name, format_countdown, format_expiry, is_account_color, mask_account_name, model, plan_display_name, primary_window_index, relative_luminance, reset_timer_color, visible_usage_color};
     use crate::domain::{AccountRecord, RateWindow, ResetCredit, UsageSnapshot};
     use chrono::{Local, TimeZone};
     use slint::Model;
@@ -537,8 +548,8 @@ mod tests {
             last_error: None,
         };
 
-        let shown = account_view(&record, 1, true);
-        let hidden = account_view(&record, 1, false);
+        let shown = account_view(&record, 1, true, false);
+        let hidden = account_view(&record, 1, false, false);
         assert!(shown.has_reset_credits);
         assert_eq!(shown.reset_credits.row_count(), 1);
         assert!(shown.has_hidden_details);
@@ -546,6 +557,37 @@ mod tests {
         assert_eq!(hidden.reset_credits.row_count(), 0);
         assert!(!hidden.has_hidden_details);
         assert!(shown.row_height_px > hidden.row_height_px);
+    }
+
+    #[test]
+    fn separator_is_hidden_after_the_last_enabled_account() {
+        let record = AccountRecord {
+            id: "first".into(),
+            home: PathBuf::new(),
+            provider_id: "openai".into(),
+            display_name: "First".into(),
+            color_name: "cyan".into(),
+            enabled: true,
+            pin_short: false,
+            expanded: false,
+            name_revealed: false,
+            email_revealed: false,
+            confirm_credit_id: String::new(),
+            snapshot: None,
+            last_error: None,
+        };
+        let mut last_enabled = record.clone();
+        last_enabled.id = "last-enabled".into();
+        let mut disabled_tail = record.clone();
+        disabled_tail.id = "disabled-tail".into();
+        disabled_tail.enabled = false;
+
+        let (rows, enabled_count) = model(&[record, last_enabled, disabled_tail], true);
+
+        assert_eq!(enabled_count, 2);
+        assert!(rows.row_data(0).expect("first row").show_separator);
+        assert!(!rows.row_data(1).expect("last enabled row").show_separator);
+        assert!(!rows.row_data(2).expect("disabled row").show_separator);
     }
 
     #[test]
