@@ -1,4 +1,4 @@
-import { LineEdit, Palette, ScrollView } from "std-widgets.slint";
+import { Palette, ScrollView } from "std-widgets.slint";
 
 export struct ResetCreditView {
     id: string,
@@ -175,15 +175,29 @@ component AppSwitch inherits Rectangle {
         y: 1px;
         width: parent.width;
         height: 20px;
-        border-radius: 10px;
-        border-width: root.checked ? 0px : 1px;
-        border-color: Palette.border;
-        background: root.checked ? Palette.foreground : Palette.alternate-background;
+        background: transparent;
         opacity: root.enabled ? (area.has-hover ? 0.82 : 1) : 0.4;
+
+        if root.checked: Rectangle {
+            x: 1px;
+            width: parent.width - 2px;
+            height: parent.height;
+            border-radius: 8px;
+            background: Palette.foreground;
+        }
+
+        if !root.checked: Rectangle {
+            x: 1px;
+            width: parent.width - 2px;
+            border-radius: 10px;
+            border-width: 1px;
+            border-color: Palette.border;
+            background: Palette.alternate-background;
+        }
     }
 
     thumb := Rectangle {
-        x: root.checked ? parent.width - self.width - 4px : 4px;
+        x: root.checked ? parent.width - self.width - 5px : 5px;
         y: 5px;
         width: 12px;
         height: 12px;
@@ -1102,6 +1116,51 @@ component UsageBarColorSettings inherits Rectangle {
     }
 }
 
+// A compact name editor that keeps the text input at its real height. Fluent's
+// LineEdit has a 32 px minimum, so forcing it into a shorter card row can clip
+// its internal TextInput differently between software and FemtoVG renderers.
+component CompactNameInput inherits Rectangle {
+    in-out property <string> text;
+    in property <string> placeholder-text: "Account name";
+    callback edited(string);
+    width: 132px;
+    height: 26px;
+    clip: true;
+    background: Palette.control-background;
+    border-width: 1px;
+    border-color: name-input.has-focus ? Palette.foreground : Palette.border;
+    border-radius: 4px;
+
+    name-input := TextInput {
+        x: 8px;
+        y: 0px;
+        width: parent.width - 16px;
+        height: parent.height;
+        text <=> root.text;
+        color: Palette.foreground;
+        font-size: 11px;
+        vertical-alignment: center;
+        single-line: true;
+        accessible-role: text-input;
+        accessible-label: "Account name";
+        edited => { root.edited(self.text); }
+    }
+
+    if root.text.is-empty && !name-input.has-focus: Text {
+        x: 8px;
+        y: 0px;
+        width: parent.width - 16px;
+        height: parent.height;
+        text: root.placeholder-text;
+        color: Palette.foreground;
+        opacity: 0.48;
+        font-size: 11px;
+        vertical-alignment: center;
+        overflow: elide;
+        accessible-role: none;
+    }
+}
+
 component AccountSettings inherits Rectangle {
     in property <AccountView> account;
     in property <[ColorChoice]> colors;
@@ -1117,7 +1176,7 @@ component AccountSettings inherits Rectangle {
     in-out property <float> picker-saturation: root.account.account-color.to-hsv().saturation;
     in-out property <float> picker-value: root.account.account-color.to-hsv().value;
     height: 126px + (root.picker-open ? 98px : 0px);
-    background: Palette.alternate-background.darker(0.06);
+    background: Palette.alternate-background.darker(0.14);
     border-color: Palette.border;
     border-width: 1px;
     border-radius: 6px;
@@ -1203,15 +1262,15 @@ component AccountSettings inherits Rectangle {
                 vertical-alignment: center;
             }
             Rectangle {
-                width: 160px;
+                width: 132px;
                 height: 32px;
                 background: transparent;
-                LineEdit {
-                    y: 2px;
+                CompactNameInput {
+                    x: 0px;
+                    y: (parent.height - self.height) / 2;
                     width: parent.width;
-                    height: 28px;
+                    height: 26px;
                     text: root.account.display-name;
-                    placeholder-text: "Account name";
                     edited(value) => { root.name-changed(root.account.id, value); }
                 }
             }
@@ -1632,10 +1691,9 @@ export component MainWindow inherits Window {
                 VerticalLayout {
                     width: settings-scroll.visible-width;
                     padding-top: 8px;
-                    // The Fluent scrollbar occupies the final 14 px of the viewport.
-                    // These insets leave 6 px of visible space on both sides.
-                    padding-left: 6px;
-                    padding-right: 20px;
+                    // Match the content inset directly to both window edges.
+                    padding-left: 14px;
+                    padding-right: 14px;
                     padding-bottom: 10px;
                     spacing: 0px;
 
@@ -1706,9 +1764,10 @@ export component MainWindow inherits Window {
                             opacity: 0.58;
                             vertical-alignment: bottom;
                         }
+                        Rectangle { height: 4px; background: transparent; }
 
                         VerticalLayout {
-                            width: parent.width;
+                            horizontal-stretch: 1;
                             spacing: 6px;
 
                             for account[index] in root.accounts: AccountSettings {

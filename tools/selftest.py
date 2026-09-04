@@ -112,10 +112,21 @@ account_settings = ui.split('component AccountSettings inherits Rectangle {', 1)
 assert 'show-plan-badges' not in account_settings
 assert 'if root.account.has-plan: PlanBadge' in account_settings
 assert 'border-color: Palette.border' in account_settings and 'border-radius: 6px' in account_settings
-assert 'background: Palette.alternate-background.darker(0.06)' in account_settings
+assert 'background: Palette.alternate-background.darker(0.14)' in account_settings
+assert 'CompactNameInput' in account_settings
+assert 'width: 132px' in account_settings and 'height: 26px' in account_settings
+assert 'height: 32px' in account_settings and 'y: (parent.height - self.height) / 2' in account_settings
+assert 'text <=> root.text' in ui and 'vertical-alignment: center' in ui
 assert 'viewport-width: self.visible-width' in ui
 assert 'width: settings-scroll.visible-width' in ui
-assert 'padding-left: 6px' in ui and 'padding-right: 20px' in ui
+assert 'padding-left: 14px' in ui and 'padding-right: 14px' in ui
+settings_account_list = ui.split('text: "Accounts";', 1)[1].split('for account[index] in root.accounts:', 1)[0]
+assert 'horizontal-stretch: 1' in settings_account_list and 'width: parent.width' not in settings_account_list
+assert 'Rectangle { height: 4px; background: transparent; }' in settings_account_list
+app_switch = ui.split('component AppSwitch inherits Rectangle {', 1)[1].split('component HeaderIconButton', 1)[0]
+assert 'if root.checked: Rectangle' in app_switch
+assert 'if !root.checked: Rectangle' in app_switch
+assert 'parent.width - self.width - 5px : 5px' in app_switch
 assert 'Display plan badges beside account names on the dashboard' in ui
 assert 'title: "Show banked resets"' in ui
 assert 'padding-top: 8px' in ui

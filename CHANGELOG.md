@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.12 — 2026-09-04
+
+- Keep account-name fields compact, vertically centered with their labels, and aligned consistently in FemtoVG.
+- Add balanced settings gutters, deepen account-card surfaces, and smooth checked switches by using pixel-aligned native rails.
+
 ## 0.4.11 — 2026-09-04
 
 - Constrain settings content to the actual visible scroll viewport so cards and controls no longer extend behind the right edge.
