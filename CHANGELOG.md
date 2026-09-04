@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.10 — 2026-09-04
+
+- Rebalance the settings viewport gutters so account cards and other controls fit without clipping while retaining equal visible space on both sides.
+- Slightly darken account-card surfaces to strengthen their separation from the settings background.
+
 ## 0.4.9 — 2026-09-04
 
 - Keep plan badges visible in account settings while letting the display preference control only the main dashboard.

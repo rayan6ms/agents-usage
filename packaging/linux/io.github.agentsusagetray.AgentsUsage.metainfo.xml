@@ -12,6 +12,11 @@
     <binary>agents-usage</binary>
   </provides>
   <releases>
+    <release version="0.4.10" date="2026-09-04">
+      <description>
+        <p>Fixes settings-menu clipping and refines the account-card contrast and gutters.</p>
+      </description>
+    </release>
     <release version="0.4.9" date="2026-09-04">
       <description>
         <p>Refines dashboard spacing and account settings while substantially reducing duplicated release work.</p>
