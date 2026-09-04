@@ -4,8 +4,8 @@ use chrono::{Datelike, Local, TimeZone};
 use slint::{Color, ModelRc, VecModel};
 use std::rc::Rc;
 
-pub const PANEL_HEADER_HEIGHT: f32 = 41.0;
-pub const PANEL_BOTTOM_PADDING: f32 = 17.0;
+// The 40 px header, 1 px divider, and 2 px outer frame.
+pub const PANEL_HEADER_HEIGHT: f32 = 43.0;
 pub const EMPTY_CONTENT_HEIGHT: f32 = 72.0;
 pub const PANEL_MAX_HEIGHT: f32 = 680.0;
 
@@ -210,7 +210,7 @@ pub fn panel_height(records: &[AccountRecord], show_banked_resets: bool) -> f32 
         .filter(|record| record.enabled)
         .map(|record| account_view(record, enabled_count, show_banked_resets, false).row_height_px)
         .sum::<f32>();
-    (PANEL_HEADER_HEIGHT + rows + PANEL_BOTTOM_PADDING).clamp(128.0, PANEL_MAX_HEIGHT)
+    (PANEL_HEADER_HEIGHT + rows).min(PANEL_MAX_HEIGHT)
 }
 
 pub fn model(records: &[AccountRecord], show_banked_resets: bool) -> (ModelRc<AccountView>, usize) {

@@ -156,6 +156,15 @@ h1 {
 .plan-badge.plan-enterprise { background: #7f2935; }
 .plan-badge.plan-edu { background: #766214; }
 
+.warning-icon {
+  flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
+  background: #facc15;
+  -webkit-mask: url("./warning-icon.svg") center / contain no-repeat;
+  mask: url("./warning-icon.svg") center / contain no-repeat;
+}
+
 .email-button {
   min-width: 0;
   flex: 1;

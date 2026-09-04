@@ -1,8 +1,8 @@
 "use strict";
 
-const CACHE_NAME = "agents-usage-mobile-v8";
+const CACHE_NAME = "agents-usage-mobile-v9";
 const ROOT = new URL("./", self.location.href);
-const SHELL = ["", "app.css", "app.js", "manifest.webmanifest", "icon-192.png", "icon-512.png"].map(path => new URL(path, ROOT).toString());
+const SHELL = ["", "app.css", "app.js", "manifest.webmanifest", "warning-icon.svg", "icon-192.png", "icon-512.png"].map(path => new URL(path, ROOT).toString());
 
 self.addEventListener("install", event => {
   event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(SHELL)).then(() => self.skipWaiting()));

@@ -228,6 +228,7 @@ function accountHtml(account, accountCount) {
   const shownEmail = latestState.blur_emails && !revealedEmails.has(account.key) ? account.masked_email : account.email;
   const planClass = account.plan_name ? ` plan-${account.plan_name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}` : "";
   const planBadge = latestState.show_plan_badges !== false && account.plan_name ? `<span class="plan-badge${planClass}" aria-label="${escapeHtml(account.plan_name)} plan">${escapeHtml(account.plan_name)}</span>` : "";
+  const warningIcon = account.error ? `<span class="warning-icon" role="img" aria-label="Account warning: ${escapeHtml(account.error)}"></span>` : "";
   const mainLimit = longWindow ? limitHtml(account, longWindow, isExpanded || alwaysShowResetCounter, accountCount) : `<div class="checking">${escapeHtml(account.error || "Checking usage…")}</div>`;
   const pinned = pinShort ? limitHtml(account, shortWindow, isExpanded || alwaysShowResetCounter, accountCount) : "";
   const detailLimits = isExpanded ? detailWindows.map(window => limitHtml(account, window, true, accountCount)).join("") : "";
@@ -239,6 +240,7 @@ function accountHtml(account, accountCount) {
       <span class="provider-wrap"><img class="provider-mark" src="${endpoint(`provider-icons/${account.provider_id}`)}" alt="">${accountCount > 1 ? '<span class="accent-dot"></span>' : ""}</span>
       <button class="identity-button" data-action="name" type="button">${escapeHtml(shownName)}</button>
       ${planBadge}
+      ${warningIcon}
       <button class="email-button" data-action="email" type="button">${escapeHtml(shownEmail)}</button>
       ${hasDetails ? `<button class="details-button" data-action="details" type="button" aria-label="${isExpanded ? "Hide" : "Show"} account details" aria-expanded="${isExpanded}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg></button>` : ""}
     </div>

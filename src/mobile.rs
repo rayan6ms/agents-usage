@@ -34,6 +34,7 @@ const APP_JS: &str = include_str!("../mobile/app.js");
 const MANIFEST: &str = include_str!("../mobile/manifest.webmanifest");
 const SERVICE_WORKER: &str = include_str!("../mobile/sw.js");
 const ICON_SVG: &str = include_str!("../packaging/linux/agents-usage.svg");
+const WARNING_ICON_SVG: &str = include_str!("../assets/icons/triangle-alert.svg");
 const PROVIDER_OPENAI: &str = include_str!("../assets/providers/openai.svg");
 const PROVIDER_OPENCODE: &str = include_str!("../assets/providers/opencode.svg");
 const PROVIDER_ANTHROPIC: &str = include_str!("../assets/providers/anthropic.svg");
@@ -153,6 +154,7 @@ fn router(state: MobileServerState) -> Router {
         .route("/manifest.webmanifest", get(manifest))
         .route("/sw.js", get(service_worker))
         .route("/icon.svg", get(icon_svg))
+        .route("/warning-icon.svg", get(warning_icon_svg))
         .route("/provider-icons/{provider}", get(provider_icon))
         .route("/icon-192.png", get(icon_192))
         .route("/icon-512.png", get(icon_512))
@@ -216,6 +218,14 @@ async fn service_worker() -> Response {
 async fn icon_svg() -> Response {
     static_response(
         ICON_SVG.as_bytes(),
+        "image/svg+xml",
+        "public, max-age=86400",
+    )
+}
+
+async fn warning_icon_svg() -> Response {
+    static_response(
+        WARNING_ICON_SVG.as_bytes(),
         "image/svg+xml",
         "public, max-age=86400",
     )
@@ -953,6 +963,17 @@ mod tests {
             assert_eq!(icon.status(), StatusCode::OK);
             assert_eq!(icon.headers().get("content-type").unwrap(), "image/svg+xml");
         }
+
+        let warning_icon = app
+            .clone()
+            .oneshot(Request::get("/warning-icon.svg").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(warning_icon.status(), StatusCode::OK);
+        assert_eq!(
+            warning_icon.headers().get("content-type").unwrap(),
+            "image/svg+xml"
+        );
 
         let uri = format!(
             "/agents-usage/pair?token={pairing_token}&path=/agents-usage/&device=Pixel%20test&device_id=11111111-2222-4333-8444-555555555555"

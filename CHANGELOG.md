@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.8 — 2026-09-04
+
+- Remove the remaining space below the final account so the desktop window ends flush with its content.
+- Show a centered yellow warning icon beside account names and plan badges when an account has an error, including in the phone companion.
+
 ## 0.4.7 — 2026-09-03
 
 - Remove the trailing account separator from the final visible row on desktop and phone views.

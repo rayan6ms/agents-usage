@@ -12,6 +12,7 @@ required = [
     'mobile/index.html', 'mobile/app.css', 'mobile/app.js',
     'mobile/manifest.webmanifest', 'mobile/sw.js',
     'mobile/icon-192.png', 'mobile/icon-512.png',
+    'assets/icons/triangle-alert.svg',
     'assets/providers/openai.svg', 'assets/providers/opencode.svg',
     'assets/providers/anthropic.svg', 'assets/providers/gemini.svg',
     'assets/providers/cursor.svg', 'assets/providers/xai.svg', 'docs/providers.md',
@@ -100,6 +101,8 @@ assert 'settings-height-px' in ui
 assert 'vertical-scrollbar-policy: as-needed' in ui
 assert 'if root.enabled-account-count > 0: DashboardScrollView' in ui
 assert 'root.account.show-separator ? 1px : 0px' in ui
+assert 'assets/icons/triangle-alert.svg' in ui and 'if root.account.has-error: AccountWarning' in ui
+assert 'padding-bottom: 17px' not in ui
 assert 'title: "Show banked resets"' in ui
 assert 'padding-top: 8px' in ui
 assert 'Personal' not in ui and 'team@anthropic.example' not in ui
@@ -108,6 +111,7 @@ assert 'MoveFileExW' in (root / 'src/config.rs').read_text()
 assert '<span class="reset-text"> • resets in <span class="reset-timer ' in mobile_js
 assert '.reset-timer.colored' in mobile_css and '.reset-text.colored' not in mobile_css
 assert '.account:last-child { border-bottom: 0; }' in mobile_css
+assert 'class="warning-icon"' in mobile_js and './warning-icon.svg' in mobile_css
 assert 'always_show_reset_counter' in mobile_js and 'pin_short_global' not in mobile_js
 assert 'show_banked_resets' in mobile_js
 assert 'STATE_CACHE_KEY' in mobile_js and 'restoreCachedState' in mobile_js

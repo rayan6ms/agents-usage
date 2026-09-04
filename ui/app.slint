@@ -131,6 +131,22 @@ component PlanBadge inherits Rectangle {
     }
 }
 
+component AccountWarning inherits Rectangle {
+    width: 16px;
+    height: 22px;
+    background: transparent;
+
+    Image {
+        x: 1px;
+        y: 4px;
+        width: 14px;
+        height: 14px;
+        source: @image-url("../assets/icons/triangle-alert.svg");
+        colorize: #facc15;
+        image-fit: contain;
+    }
+}
+
 component AppSwitch inherits Rectangle {
     in property <string> label;
     in property <bool> enabled: true;
@@ -668,6 +684,7 @@ component AccountRow inherits Rectangle {
             if root.show-plan-badges && root.account.has-plan: PlanBadge {
                 text: root.account.plan-name;
             }
+            if root.account.has-error: AccountWarning {}
             Rectangle {
                 horizontal-stretch: 1;
                 height: 22px;
@@ -1129,6 +1146,7 @@ component AccountSettings inherits Rectangle {
                 if root.show-plan-badges && root.account.has-plan: PlanBadge {
                     text: root.account.plan-name;
                 }
+                if root.account.has-error: AccountWarning {}
                 Rectangle { horizontal-stretch: 1; background: transparent; }
             }
             Text {
@@ -1543,7 +1561,6 @@ export component MainWindow inherits Window {
 
                 VerticalLayout {
                     width: parent.width;
-                    padding-bottom: 17px;
                     spacing: 0px;
                     for account in root.accounts: AccountRow {
                         account: account;

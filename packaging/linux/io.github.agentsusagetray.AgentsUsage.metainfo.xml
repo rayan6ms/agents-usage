@@ -12,6 +12,11 @@
     <binary>agents-usage</binary>
   </provides>
   <releases>
+    <release version="0.4.8" date="2026-09-04">
+      <description>
+        <p>Removes the final account-row spacing and adds prominent account warning indicators.</p>
+      </description>
+    </release>
     <release version="0.4.7" date="2026-09-03">
       <description>
         <p>Removes the trailing separator from the final visible account row on desktop and phone views.</p>
