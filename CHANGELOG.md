@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.9 — 2026-09-04
+
+- Keep plan badges visible in account settings while letting the display preference control only the main dashboard.
+- Separate account settings into compact bordered cards and restore a subtle amount of breathing room below the final dashboard account.
+- Shorten CI and release turnaround with parallel checks, Rust build caches, lightweight release validation, and Android-only signing preflights.
+
 ## 0.4.8 — 2026-09-04
 
 - Remove the remaining space below the final account so the desktop window ends flush with its content.

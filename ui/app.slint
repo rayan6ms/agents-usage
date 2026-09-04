@@ -1107,7 +1107,6 @@ component AccountSettings inherits Rectangle {
     in property <[ColorChoice]> colors;
     in property <bool> can-move-up: false;
     in property <bool> can-move-down: false;
-    in property <bool> show-plan-badges: true;
     callback name-changed(string, string);
     callback color-changed(string, string);
     callback custom-color-changed(string, color);
@@ -1117,12 +1116,17 @@ component AccountSettings inherits Rectangle {
     in-out property <float> picker-hue: root.account.account-color.to-hsv().hue;
     in-out property <float> picker-saturation: root.account.account-color.to-hsv().saturation;
     in-out property <float> picker-value: root.account.account-color.to-hsv().value;
-    height: 122px + (root.picker-open ? 98px : 0px);
-    background: transparent;
+    height: 126px + (root.picker-open ? 98px : 0px);
+    background: Palette.alternate-background;
+    border-color: Palette.border;
+    border-width: 1px;
+    border-radius: 6px;
 
     VerticalLayout {
-        width: parent.width;
-        height: parent.height;
+        x: 8px;
+        y: 2px;
+        width: parent.width - 16px;
+        height: parent.height - 4px;
         spacing: 0px;
 
         Rectangle {
@@ -1143,7 +1147,7 @@ component AccountSettings inherits Rectangle {
                     vertical-alignment: center;
                     overflow: elide;
                 }
-                if root.show-plan-badges && root.account.has-plan: PlanBadge {
+                if root.account.has-plan: PlanBadge {
                     text: root.account.plan-name;
                 }
                 if root.account.has-error: AccountWarning {}
@@ -1561,6 +1565,7 @@ export component MainWindow inherits Window {
 
                 VerticalLayout {
                     width: parent.width;
+                    padding-bottom: 6px;
                     spacing: 0px;
                     for account in root.accounts: AccountRow {
                         account: account;
@@ -1663,7 +1668,7 @@ export component MainWindow inherits Window {
                         }
                         SettingRow {
                             title: "Show plan badges";
-                            subtitle: "Display each account's plan beside its name";
+                            subtitle: "Display plan badges beside account names on the dashboard";
                             checked: root.show-plan-badges;
                             changed(value) => { root.show-plan-badges-changed(value); }
                         }
@@ -1699,17 +1704,21 @@ export component MainWindow inherits Window {
                             vertical-alignment: bottom;
                         }
 
-                        for account[index] in root.accounts: AccountSettings {
-                            account: account;
-                            colors: root.account-colors;
-                            show-plan-badges: root.show-plan-badges;
-                            can-move-up: index > 0;
-                            can-move-down: index + 1 < root.accounts.length;
-                            name-changed(id, value) => { root.account-name-changed(id, value); }
-                            color-changed(id, value) => { root.account-color-changed(id, value); }
-                            custom-color-changed(id, value) => { root.account-custom-color-changed(id, value); }
-                            enabled-changed(id, value) => { root.account-enabled-changed(id, value); }
-                            move-requested(id, direction) => { root.account-move-requested(id, direction); }
+                        VerticalLayout {
+                            width: parent.width;
+                            spacing: 6px;
+
+                            for account[index] in root.accounts: AccountSettings {
+                                account: account;
+                                colors: root.account-colors;
+                                can-move-up: index > 0;
+                                can-move-down: index + 1 < root.accounts.length;
+                                name-changed(id, value) => { root.account-name-changed(id, value); }
+                                color-changed(id, value) => { root.account-color-changed(id, value); }
+                                custom-color-changed(id, value) => { root.account-custom-color-changed(id, value); }
+                                enabled-changed(id, value) => { root.account-enabled-changed(id, value); }
+                                move-requested(id, direction) => { root.account-move-requested(id, direction); }
+                            }
                         }
 
                         Text {

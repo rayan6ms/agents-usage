@@ -8,12 +8,17 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   desktop:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - run: rustup show active-toolchain
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev libxkbcommon-x11-dev
       - run: cargo test --locked
       - run: cargo clippy --locked -- -D warnings
@@ -38,7 +43,6 @@ jobs:
       - run: ./mobile-android/gradlew --no-daemon -p mobile-android testDebugUnitTest lintDebug assembleDebug
 
   android-emulator:
-    needs: android
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false

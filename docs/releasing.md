@@ -10,11 +10,12 @@ Android requires every update to use the same signing certificate as the install
 
 There is no encrypted-key backup step in the project and no signing-key handling in the normal release flow. The keystore and passwords must not be committed to the repository.
 
-## Preflight
+## Release
 
 1. Open a pull request and let CI run the desktop checks plus Android unit, lint, API 26, and current-API tests.
-2. Dispatch **Release packages** with **Build and verify a signed Android preflight artifact** enabled. The workflow tests every platform and verifies the APK certificate and checksum.
-3. After the preflight succeeds, merge and push a version tag matching `Cargo.toml` (for example, `v0.3.0`).
-4. The tag workflow creates the GitHub release and uploads every desktop package, the signed APK, and its checksum.
+2. After CI succeeds on `main`, push a version tag matching `Cargo.toml` (for example, `v0.5.0`).
+3. The tag workflow checks that the tag points to the current `main` commit, creates each platform package in parallel, verifies the Android signing certificate, and publishes the GitHub release.
+
+The release workflow intentionally does not repeat the test and lint suite that CI has already completed for the same commit. If Android signing secrets or configuration changed, first dispatch **Release packages** with **Build and verify a signed Android preflight artifact** enabled; this exceptional preflight builds only the signed Android artifact rather than duplicating every desktop package.
 
 GitHub Actions are pinned to full commits and the Gradle wrapper verifies its distribution checksum. Dependabot or an equivalent reviewed change should update those pins deliberately.

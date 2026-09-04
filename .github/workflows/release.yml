@@ -14,6 +14,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   verify:
     runs-on: ubuntu-24.04
@@ -25,19 +29,18 @@ jobs:
         run: |
           package_version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "agents-usage") | .version')
           test "$GITHUB_REF_NAME" = "v$package_version"
-      - run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev libxkbcommon-x11-dev
-      - run: cargo test --locked
-      - run: cargo clippy --locked -- -D warnings
+          git fetch --no-tags origin main
+          test "$GITHUB_SHA" = "$(git rev-parse FETCH_HEAD)"
       - run: ./tools/selftest.py
 
   windows:
+    if: startsWith(github.ref, 'refs/tags/v')
     needs: verify
     runs-on: windows-2025
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - run: rustup show active-toolchain
-      - run: cargo test --locked
-      - run: cargo clippy --locked -- -D warnings
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - run: cargo build --release --locked
       - shell: pwsh
         run: ./tools/package-windows.ps1
@@ -48,13 +51,14 @@ jobs:
           if-no-files-found: error
 
   macos:
+    if: startsWith(github.ref, 'refs/tags/v')
     needs: verify
     runs-on: macos-15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - run: rustup show active-toolchain
       - run: rustup target add x86_64-apple-darwin
-      - run: cargo test --locked
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - run: cargo build --release --locked --target aarch64-apple-darwin
       - run: cargo build --release --locked --target x86_64-apple-darwin
       - run: |
@@ -73,11 +77,15 @@ jobs:
           if-no-files-found: error
 
   linux:
+    if: startsWith(github.ref, 'refs/tags/v')
     needs: verify
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - run: rustup show active-toolchain
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          cache-directories: .packaging-cache
       - run: |
           sudo apt-get update
           sudo apt-get install -y appstream desktop-file-utils flatpak libfontconfig1-dev librsvg2-common libxkbcommon-x11-dev podman rpm uidmap
@@ -109,8 +117,9 @@ jobs:
       - uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4
         with:
           packages: "platform-tools platforms;android-36 build-tools;35.0.0"
-      - name: Test, lint, and assemble debug APK
-        run: ./mobile-android/gradlew --no-daemon -p mobile-android testDebugUnitTest lintDebug assembleDebug
+      - name: Assemble unsigned debug APK
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') && !inputs.sign_android }}
+        run: ./mobile-android/gradlew --no-daemon -p mobile-android assembleDebug
       - name: Check release signing secrets
         if: startsWith(github.ref, 'refs/tags/v') || inputs.sign_android
         env:

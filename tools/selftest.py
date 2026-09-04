@@ -59,6 +59,8 @@ providers = (root / 'src/providers.rs').read_text()
 android_build = (root / 'mobile-android/app/build.gradle').read_text()
 android_main = (root / 'mobile-android/app/src/main/java/io/github/agentsusagetray/companion/MainActivity.java').read_text()
 release_workflow = (root / '.github/workflows/release.yml').read_text()
+ci_workflow = (root / '.github/workflows/ci.yml').read_text()
+ui_model = (root / 'src/ui_model.rs').read_text()
 
 assert 'account/rateLimits/read' in codex
 assert 'READ_ATTEMPTS: usize = 3' in codex
@@ -103,6 +105,14 @@ assert 'if root.enabled-account-count > 0: DashboardScrollView' in ui
 assert 'root.account.show-separator ? 1px : 0px' in ui
 assert 'assets/icons/triangle-alert.svg' in ui and 'if root.account.has-error: AccountWarning' in ui
 assert 'padding-bottom: 17px' not in ui
+dashboard = ui.split('if root.enabled-account-count > 0: DashboardScrollView {', 1)[1].split('if root.settings-visible:', 1)[0]
+assert 'padding-bottom: 6px' in dashboard
+assert 'PANEL_BOTTOM_PADDING: f32 = 6.0' in ui_model and 'rows + PANEL_BOTTOM_PADDING' in ui_model
+account_settings = ui.split('component AccountSettings inherits Rectangle {', 1)[1].split('component MobileActionButton', 1)[0]
+assert 'show-plan-badges' not in account_settings
+assert 'if root.account.has-plan: PlanBadge' in account_settings
+assert 'border-color: Palette.border' in account_settings and 'border-radius: 6px' in account_settings
+assert 'Display plan badges beside account names on the dashboard' in ui
 assert 'title: "Show banked resets"' in ui
 assert 'padding-top: 8px' in ui
 assert 'Personal' not in ui and 'team@anthropic.example' not in ui
@@ -123,6 +133,10 @@ assert 'Color.rgb(39, 191, 206)' not in android_main
 assert 'applicationId "io.github.agentsusagetray.companion"' in android_build
 assert 'applicationIdSuffix ".debug"' in android_build
 assert 'Agents-Usage-${version}-android.apk' in release_workflow
+rust_cache = 'Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6'
+assert rust_cache in ci_workflow and release_workflow.count(rust_cache) == 3
+assert 'cargo test --locked' not in release_workflow and 'cargo clippy --locked' not in release_workflow
+assert 'cancel-in-progress: true' in ci_workflow
 assert not (root / 'tools/backup-android-signing-key.sh').exists()
 
 for rel in ['src/main.rs', 'src/codex.rs', 'ui/app.slint', 'integration/gnome-shell/extension/extension.js']:
