@@ -12,6 +12,11 @@
     <binary>agents-usage</binary>
   </provides>
   <releases>
+    <release version="0.4.11" date="2026-09-04">
+      <description>
+        <p>Constrains settings content to the visible scroll viewport and preserves balanced gutters around the scrollbar.</p>
+      </description>
+    </release>
     <release version="0.4.10" date="2026-09-04">
       <description>
         <p>Fixes settings-menu clipping and refines the account-card contrast and gutters.</p>

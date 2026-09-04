@@ -113,7 +113,9 @@ assert 'show-plan-badges' not in account_settings
 assert 'if root.account.has-plan: PlanBadge' in account_settings
 assert 'border-color: Palette.border' in account_settings and 'border-radius: 6px' in account_settings
 assert 'background: Palette.alternate-background.darker(0.06)' in account_settings
-assert 'padding-left: 6px' in ui and 'padding-right: 18px' in ui
+assert 'viewport-width: self.visible-width' in ui
+assert 'width: settings-scroll.visible-width' in ui
+assert 'padding-left: 6px' in ui and 'padding-right: 20px' in ui
 assert 'Display plan badges beside account names on the dashboard' in ui
 assert 'title: "Show banked resets"' in ui
 assert 'padding-top: 8px' in ui

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.11 — 2026-09-04
+
+- Constrain settings content to the actual visible scroll viewport so cards and controls no longer extend behind the right edge.
+- Reserve the Fluent scrollbar's full width while keeping balanced visible gutters around settings content.
+
 ## 0.4.10 — 2026-09-04
 
 - Rebalance the settings viewport gutters so account cards and other controls fit without clipping while retaining equal visible space on both sides.

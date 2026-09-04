@@ -1624,17 +1624,18 @@ export component MainWindow inherits Window {
             settings-scroll := ScrollView {
                 horizontal-stretch: 1;
                 vertical-stretch: 1;
+                viewport-width: self.visible-width;
                 horizontal-scrollbar-policy: always-off;
                 vertical-scrollbar-policy: as-needed;
                 mouse-drag-pan-enabled: false;
 
                 VerticalLayout {
-                    width: parent.width;
+                    width: settings-scroll.visible-width;
                     padding-top: 8px;
-                    // The Fluent scrollbar occupies the final 12 px of the viewport.
+                    // The Fluent scrollbar occupies the final 14 px of the viewport.
                     // These insets leave 6 px of visible space on both sides.
                     padding-left: 6px;
-                    padding-right: 18px;
+                    padding-right: 20px;
                     padding-bottom: 10px;
                     spacing: 0px;
 
