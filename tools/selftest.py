@@ -7,7 +7,7 @@ root = Path(__file__).resolve().parents[1]
 required = [
     'Cargo.toml', '.cargo/config.toml', 'build.rs', 'README.md', 'LICENSE', 'CHANGELOG.md',
     'CONTRIBUTING.md',
-    'src/main.rs', 'src/codex.rs', 'src/config.rs', 'src/discovery.rs', 'src/providers.rs',
+    'src/main.rs', 'src/accounts.rs', 'src/codex.rs', 'src/config.rs', 'src/discovery.rs', 'src/providers.rs',
     'src/domain.rs', 'src/mobile.rs', 'src/ui_model.rs', 'ui/app.slint',
     'mobile/index.html', 'mobile/app.css', 'mobile/app.js',
     'mobile/manifest.webmanifest', 'mobile/sw.js',

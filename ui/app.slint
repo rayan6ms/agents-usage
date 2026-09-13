@@ -346,7 +346,9 @@ component ProviderMark inherits Rectangle {
 }
 
 component HeaderIconButton inherits Rectangle {
-    in property <image> icon;
+    // Lucide geometry from assets/icons, rendered directly to avoid the SVG
+    // image texture artifacts seen after opening/closing the popup.
+    in property <string> icon-path;
     in property <string> label;
     in property <length> icon-size: 18px;
     in property <bool> active: true;
@@ -357,20 +359,27 @@ component HeaderIconButton inherits Rectangle {
     border-radius: 6px;
     accessible-role: button;
     accessible-label: root.label;
+    accessible-enabled: root.active;
     accessible-action-default => { if (root.active) { root.clicked(); } }
     opacity: root.active ? 1 : 0.36;
 
-    Image {
+    Path {
         width: root.icon-size;
         height: root.icon-size;
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
-        source: root.icon;
-        colorize: Palette.foreground;
-        image-fit: contain;
+        viewbox-width: 24;
+        viewbox-height: 24;
+        fill: transparent;
+        stroke: Palette.foreground;
+        stroke-width: root.icon-size / 12;
+        stroke-line-cap: round;
+        stroke-line-join: round;
+        commands: root.icon-path;
     }
     area := TouchArea {
-        clicked => { if (root.active) { root.clicked(); } }
+        enabled: root.active;
+        clicked => { root.clicked(); }
     }
 }
 
@@ -1594,7 +1603,7 @@ export component MainWindow inherits Window {
                 HeaderIconButton {
                     x: parent.width - 68px;
                     y: 5px;
-                    icon: @image-url("../assets/icons/settings-2.svg");
+                    icon-path: "M14 17H5 M19 7h-9 M20 17a3 3 0 1 0-6 0 3 3 0 1 0 6 0 M10 7a3 3 0 1 0-6 0 3 3 0 1 0 6 0";
                     icon-size: 18px;
                     label: "Settings";
                     clicked => { root.settings-requested(); }
@@ -1602,7 +1611,7 @@ export component MainWindow inherits Window {
                 HeaderIconButton {
                     x: parent.width - 34px;
                     y: 5px;
-                    icon: @image-url("../assets/icons/refresh-cw.svg");
+                    icon-path: "M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8 M21 3v5h-5 M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16 M8 16H3v5";
                     icon-size: 18px;
                     label: root.refreshing ? "Refreshing" : "Refresh";
                     active: !root.refreshing;
@@ -1663,7 +1672,7 @@ export component MainWindow inherits Window {
                 HeaderIconButton {
                     x: 7px;
                     y: 5px;
-                    icon: @image-url("../assets/icons/chevron-left.svg");
+                    icon-path: "m15 18-6-6 6-6";
                     icon-size: 18px;
                     label: "Back to usage";
                     clicked => {

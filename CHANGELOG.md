@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.14 — 2026-09-13
+
+- Keep each Codex home and its display name attached to that directory when sign-ins overlap.
+- Select the newest duplicate login for refreshes and leave older duplicate homes visible but disabled.
+- Read local sign-in identity before refreshes so cached usage cannot relabel an account.
+- Render the Settings and Refresh header controls as pixel aligned vector icons.
+
 ## 0.4.13 — 2026-09-13
 
 - Keep Codex account preferences attached to their own `.codex` home when two homes contain the same sign-in.
