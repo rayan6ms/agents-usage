@@ -1040,23 +1040,7 @@ fn reconcile_preference_for_snapshot(
         .accounts
         .iter()
         .position(|pref| pref.provider_id == provider_id && canonical_id(&pref.home) == canonical_id(home));
-    let identity_indices = identity
-        .as_deref()
-        .map(|identity| {
-            config
-                .accounts
-                .iter()
-                .enumerate()
-                .filter_map(|(index, pref)| {
-                    (pref.provider_id == provider_id
-                        && normalized_account_email(pref.identity_email.as_deref()).as_deref() == Some(identity))
-                        .then_some(index)
-                })
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-
-    let chosen_index = identity_indices.first().copied().or(path_index);
+    let chosen_index = path_index;
     let Some(chosen_index) = chosen_index else {
         config.accounts.push(AccountPreference {
             provider_id: provider_id.into(),
@@ -1071,23 +1055,49 @@ fn reconcile_preference_for_snapshot(
     chosen.provider_id = provider_id.into();
     chosen.home = home.to_path_buf();
     chosen.identity_email = identity;
-    let mut remove = identity_indices.into_iter().collect::<HashSet<_>>();
-    if let Some(path_index) = path_index { remove.insert(path_index); }
-    remove.remove(&chosen_index);
-    config.accounts = config
-        .accounts
-        .drain(..)
-        .enumerate()
-        .filter_map(|(index, pref)| {
-            if index == chosen_index {
-                Some(chosen.clone())
-            } else if remove.contains(&index) {
-                None
+    config.accounts[chosen_index] = chosen;
+}
+
+fn codex_home_order(home: &Path) -> i64 {
+    codex::local_auth_identity(home).ok().flatten().map(|(_, order)| order).unwrap_or(0)
+}
+
+fn repair_default_display_names(config: &mut AppConfig) {
+    for pref in &mut config.accounts {
+        if pref.provider_id != providers::OPENAI { continue; }
+        let Some(name) = pref.display_name.as_deref() else { continue; };
+        let generated = name.strip_prefix("codex").is_some_and(|suffix| suffix.chars().all(|c| c.is_ascii_digit()));
+        if !generated { continue; }
+        if let Some(home_name) = pref.home.file_name().and_then(|value| value.to_str()).filter(|v| !v.is_empty()) {
+            pref.display_name = Some(home_name.strip_prefix('.').unwrap_or(home_name).to_string());
+        }
+    }
+}
+
+fn reconcile_openai_duplicates(config: &mut AppConfig) {
+    repair_default_display_names(config);
+    let mut identities = HashMap::<String, Vec<usize>>::new();
+    for (index, pref) in config.accounts.iter_mut().enumerate() {
+        if pref.provider_id != providers::OPENAI { continue; }
+        if let Ok(Some((email, _))) = codex::local_auth_identity(&pref.home) {
+            pref.identity_email = Some(email.clone());
+            identities.entry(email).or_default().push(index);
+        }
+    }
+    for indices in identities.values() {
+        if indices.len() < 2 { continue; }
+        let winner = *indices.iter().max_by_key(|index| codex_home_order(&config.accounts[**index].home)).unwrap();
+        let winner_home = config.accounts[winner].home.clone();
+        for index in indices {
+            if *index == winner {
+                config.accounts[*index].duplicate_of = None;
+                config.accounts[*index].enabled = true;
             } else {
-                Some(pref)
+                config.accounts[*index].duplicate_of = Some(winner_home.clone());
+                config.accounts[*index].enabled = false;
             }
-        })
-        .collect();
+        }
+    }
 }
 
 fn reconcile_cached_accounts(
@@ -1105,54 +1115,6 @@ fn reconcile_cached_accounts(
             .or_else(|| normalized_account_email(pref.identity_email.as_deref()));
     }
 
-    let identities = config
-        .accounts
-        .iter()
-        .filter_map(|pref| normalized_account_email(pref.identity_email.as_deref()).map(|email| (pref.provider_id.clone(), email)))
-        .collect::<Vec<_>>();
-    let mut reconciled = HashSet::new();
-    for (provider_id, identity) in identities {
-        if !reconciled.insert((provider_id.clone(), identity.clone())) { continue; }
-        let matching = config
-            .accounts
-            .iter()
-            .enumerate()
-            .filter_map(|(index, pref)| {
-                (pref.provider_id == provider_id
-                    && normalized_account_email(pref.identity_email.as_deref()).as_deref() == Some(identity.as_str()))
-                    .then_some(index)
-            })
-            .collect::<Vec<_>>();
-        if matching.len() < 2 { continue; }
-
-        // Discovery appends a newly seen path. Keep the original account's
-        // preferences and ordering, but point it at the newest path that still exists.
-        let current_home = matching
-            .iter()
-            .rev()
-            .find_map(|index| providers::is_marked(&provider_id, &config.accounts[*index].home).then(|| config.accounts[*index].home.clone()))
-            .unwrap_or_else(|| config.accounts[*matching.last().expect("duplicate group is non-empty")].home.clone());
-        let chosen_index = matching[0];
-        let mut chosen = config.accounts[chosen_index].clone();
-        chosen.home = current_home;
-        chosen.identity_email = Some(identity);
-        let remove = matching.into_iter().skip(1).collect::<HashSet<_>>();
-        config.accounts = config
-            .accounts
-            .drain(..)
-            .enumerate()
-            .filter_map(|(index, pref)| {
-                if index == chosen_index {
-                    Some(chosen.clone())
-                } else if remove.contains(&index) {
-                    None
-                } else {
-                    Some(pref)
-                }
-            })
-            .collect();
-    }
-
     let reconciled_cache = config
         .accounts
         .iter()
@@ -1161,14 +1123,6 @@ fn reconcile_cached_accounts(
                 .iter()
                 .rev()
                 .find(|cached| cached.provider_id == pref.provider_id && canonical_id(&cached.home) == canonical_id(&pref.home))
-                .or_else(|| {
-                    let identity = normalized_account_email(pref.identity_email.as_deref())?;
-                    cache.iter().rev().find(|cached| {
-                        cached.provider_id == pref.provider_id
-                            && normalized_account_email(cached.snapshot.email.as_deref()).as_deref()
-                            == Some(identity.as_str())
-                    })
-                })
                 .map(|cached| CachedUsage {
                     provider_id: pref.provider_id.clone(),
                     home: pref.home.clone(),
@@ -1318,7 +1272,6 @@ fn apply_snapshot(
     config: &Arc<Mutex<AppConfig>>,
 ) {
     let id = account_id(&provider_id, &home);
-    let identity = normalized_account_email(snapshot.email.as_deref());
     let color_index = color_index_for_home(&home);
     let mut new_record = {
         let mut cfg = match config.lock() {
@@ -1327,6 +1280,7 @@ fn apply_snapshot(
         };
         let previous = cfg.clone();
         let record = record_from_snapshot(&provider_id, home, snapshot, notice, &mut cfg, color_index);
+        if provider_id == providers::OPENAI { reconcile_openai_duplicates(&mut cfg); }
         if *cfg != previous {
             if let Err(error) = config::save(&cfg) {
                 eprintln!("settings: could not persist account discovery: {error}");
@@ -1336,14 +1290,7 @@ fn apply_snapshot(
     };
 
     if let Ok(mut records) = accounts.lock() {
-        let existing_index = records.iter().position(|record| {
-            record.provider_id == provider_id && (record.id == id
-                || identity.as_deref().is_some_and(|identity| {
-                    normalized_account_email(record.snapshot.as_ref().and_then(|snapshot| snapshot.email.as_deref()))
-                        .as_deref()
-                        == Some(identity)
-                }))
-        });
+        let existing_index = records.iter().position(|record| record.provider_id == provider_id && record.id == id);
         if let Some(index) = existing_index {
             let existing = records.remove(index);
             new_record.expanded = existing.expanded;
@@ -1351,14 +1298,7 @@ fn apply_snapshot(
             new_record.email_revealed = existing.email_revealed;
             new_record.confirm_credit_id = existing.confirm_credit_id;
         }
-        records.retain(|record| {
-            record.provider_id != provider_id || (record.id != id
-                && !identity.as_deref().is_some_and(|identity| {
-                    normalized_account_email(record.snapshot.as_ref().and_then(|snapshot| snapshot.email.as_deref()))
-                        .as_deref()
-                        == Some(identity)
-                }))
-        });
+        records.retain(|record| record.provider_id != provider_id || record.id != id);
         records.push(new_record);
         let order = config
             .lock()
@@ -2201,6 +2141,13 @@ fn main() -> Result<(), slint::PlatformError> {
             eprintln!("mobile: could not persist the phone-session migration: {error}");
         }
     }
+    let before_identity_reconcile = loaded_config.clone();
+    reconcile_openai_duplicates(&mut loaded_config);
+    if loaded_config != before_identity_reconcile {
+        if let Err(error) = config::save(&loaded_config) {
+            eprintln!("settings: could not persist account identity reconciliation: {error}");
+        }
+    }
     let loaded_cache = config::load_usage_cache();
     let (loaded_cache, reconciled) = reconcile_cached_accounts(&mut loaded_config, loaded_cache);
     if reconciled {
@@ -2778,12 +2725,13 @@ mod tests {
     use super::{
         LaunchMode, PanelAnchor, PanelEdge, SCREEN_MARGIN_PX, desktop_uses_status_notifier, infer_panel_edge,
         launch_mode, mobile_lan_url, mobile_pairing_bundle, mobile_pairing_url, move_account, move_target, normalized_account_color,
-        normalized_display_name, panel_position_for_size, placeholder_record, reconcile_cached_accounts,
+        normalized_display_name, panel_position_for_size, placeholder_record, reconcile_cached_accounts, reconcile_openai_duplicates,
         tailscale_serve_matches,
     };
     use super::MobileEndpoints;
     use crate::config::{AccountPreference, AppConfig};
     use crate::domain::{CachedUsage, UsageSnapshot};
+    use base64::Engine;
     use std::fs;
 
     #[test]
@@ -2926,7 +2874,7 @@ mod tests {
     }
 
     #[test]
-    fn cached_identity_migrates_preferences_to_the_current_home() {
+    fn cached_identity_keeps_duplicate_homes_and_preferences_separate() {
         let root = std::env::temp_dir().join(format!("agents-usage-identity-{}", uuid::Uuid::new_v4()));
         let old_home = root.join("old-shadow-home");
         let current_home = root.join("current-shadow-home");
@@ -2957,19 +2905,53 @@ mod tests {
         let (cache, changed) = reconcile_cached_accounts(
             &mut config,
             vec![
-                CachedUsage { provider_id: "openai".into(), home: old_home, snapshot: snapshot.clone() },
+                CachedUsage { provider_id: "openai".into(), home: old_home.clone(), snapshot: snapshot.clone() },
                 CachedUsage { provider_id: "openai".into(), home: current_home.clone(), snapshot },
             ],
         );
 
         assert!(changed);
-        assert_eq!(config.accounts.len(), 1);
-        assert_eq!(config.accounts[0].home, current_home);
+        assert_eq!(config.accounts.len(), 2);
+        assert_eq!(config.accounts[0].home, old_home);
         assert_eq!(config.accounts[0].display_name.as_deref(), Some("My account"));
         assert_eq!(config.accounts[0].identity_email.as_deref(), Some(email));
-        assert_eq!(cache.len(), 1);
+        assert_eq!(config.accounts[1].home, current_home);
+        assert_eq!(cache.len(), 2);
         assert_eq!(cache[0].home, config.accounts[0].home);
 
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn newest_duplicate_codex_home_wins_without_renaming_the_other_home() {
+        let root = std::env::temp_dir().join(format!("agents-usage-duplicate-{}", uuid::Uuid::new_v4()));
+        let older = root.join(".codex11");
+        let newer = root.join(".codex2");
+        fs::create_dir_all(&older).unwrap();
+        fs::create_dir_all(&newer).unwrap();
+        let token = |time| {
+            let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(
+                format!(r#"{{"email":"alex@example.com","auth_time":{time}}}"#),
+            );
+            format!("e30.{payload}.sig")
+        };
+        for (home, time) in [(&older, 100_i64), (&newer, 200_i64)] {
+            fs::write(home.join("auth.json"), serde_json::json!({"tokens": {"id_token": token(time)}}).to_string()).unwrap();
+        }
+        let mut config = AppConfig {
+            accounts: vec![
+                AccountPreference { home: root.join(".codex"), display_name: Some("codex2".into()), ..AccountPreference::default() },
+                AccountPreference { home: older.clone(), display_name: Some("codex11".into()), ..AccountPreference::default() },
+                AccountPreference { home: newer.clone(), display_name: Some("codex2".into()), ..AccountPreference::default() },
+            ],
+            ..AppConfig::default()
+        };
+        reconcile_openai_duplicates(&mut config);
+        assert_eq!(config.accounts[0].display_name.as_deref(), Some("codex"));
+        assert!(!config.accounts[1].enabled);
+        assert_eq!(config.accounts[1].duplicate_of.as_deref(), Some(newer.as_path()));
+        assert!(config.accounts[2].enabled);
+        assert!(config.accounts[2].duplicate_of.is_none());
         fs::remove_dir_all(root).unwrap();
     }
 

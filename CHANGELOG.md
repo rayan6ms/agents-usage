@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.13 — 2026-09-13
+
+- Keep Codex account preferences attached to their own `.codex` home when two homes contain the same sign-in.
+- Prefer the newest login for refreshes, while leaving older duplicate homes visible and disabled in Settings.
+- Repair generated account names from their home directory and replace the rotating chevron image with a crisp vector path.
+
 ## 0.4.12 — 2026-09-04
 
 - Keep account-name fields compact, vertically centered with their labels, and aligned consistently in FemtoVG.

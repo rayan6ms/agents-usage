@@ -472,14 +472,19 @@ component Chevron inherits Rectangle {
     width: 24px;
     height: 24px;
     background: transparent;
-    Image {
-        width: 16px;
-        height: 16px;
+    Path {
         x: 4px;
         y: 4px;
-        source: @image-url("../assets/icons/chevron-down.svg");
-        colorize: Palette.foreground;
-        image-fit: contain;
+        width: 16px;
+        height: 16px;
+        viewbox-width: 24;
+        viewbox-height: 24;
+        fill: transparent;
+        stroke: Palette.foreground;
+        stroke-width: 2px;
+        stroke-line-cap: round;
+        stroke-line-join: round;
+        commands: "m6 9 6 6 6-6";
         transform-rotation: root.expanded ? 180deg : 0deg;
         animate transform-rotation {
             duration: 140ms;

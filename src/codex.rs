@@ -1,5 +1,6 @@
 use crate::discovery::user_home;
 use crate::domain::{RateWindow, ResetCredit, UsageSnapshot};
+use base64::Engine;
 use serde_json::{Value, json};
 use std::collections::hash_map::DefaultHasher;
 use std::fs;
@@ -32,6 +33,36 @@ pub enum CodexError {
     Rpc { method: String, message: String },
     #[error("Codex App Server returned an unexpected response: {0}")]
     Protocol(String),
+}
+
+/// Read the non-secret identity claims from a local Codex auth file.
+/// The token itself is never returned or persisted.
+pub fn local_auth_identity(codex_home: &Path) -> Result<Option<(String, i64)>, CodexError> {
+    let path = codex_home.join("auth.json");
+    let text = fs::read_to_string(&path).map_err(|error| {
+        CodexError::Protocol(format!("Codex auth.json could not be read: {error}"))
+    })?;
+    let auth: Value = serde_json::from_str(&text)
+        .map_err(|_| CodexError::Protocol("Codex auth.json is invalid".into()))?;
+    let Some(token) = auth.get("tokens").and_then(|tokens| tokens.get("id_token"))
+        .and_then(Value::as_str) else { return Ok(None); };
+    let Some(payload) = token.split('.').nth(1) else { return Ok(None); };
+    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload)
+        .map_err(|_| CodexError::Protocol("Codex auth identity token is invalid".into()))?;
+    let claims: Value = serde_json::from_slice(&decoded)
+        .map_err(|_| CodexError::Protocol("Codex auth identity token is invalid".into()))?;
+    let email = claims.get("email").and_then(Value::as_str)
+        .or_else(|| claims.get("https://api.openai.com/profile").and_then(|v| v.get("email")).and_then(Value::as_str))
+        .map(str::trim).filter(|value| !value.is_empty()).map(str::to_ascii_lowercase);
+    let Some(email) = email else { return Ok(None); };
+    let login_time = claims.get("auth_time").or_else(|| claims.get("iat"))
+        .and_then(Value::as_i64).unwrap_or_else(|| {
+            fs::metadata(path).and_then(|meta| meta.modified()).ok()
+                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|duration| duration.as_secs() as i64).unwrap_or(0)
+        });
+    Ok(Some((email, login_time)))
 }
 
 impl CodexError {

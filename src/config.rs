@@ -184,6 +184,11 @@ pub struct AccountPreference {
     pub color: Option<String>,
     #[serde(default = "default_true")]
     pub enabled: bool,
+    /// Set when this sign-in is an older copy of another Codex home.
+    /// The home remains visible in Settings so its path and preferences are
+    /// never silently lost.
+    #[serde(default)]
+    pub duplicate_of: Option<PathBuf>,
     #[serde(default)]
     pub pin_short: bool,
     #[serde(default)]
@@ -201,6 +206,7 @@ impl Default for AccountPreference {
             display_name: None,
             color: None,
             enabled: true,
+            duplicate_of: None,
             pin_short: false,
             expanded: false,
         }
