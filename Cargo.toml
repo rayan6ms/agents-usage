@@ -1,6 +1,6 @@
 [package]
 name = "agents-usage"
-version = "0.4.14"
+version = "0.4.15"
 edition = "2024"
 rust-version = "1.92"
 publish = false
@@ -60,6 +60,7 @@ windows-sys = { version = "0.61", features = ["Win32_Security_Credentials", "Win
 slint-build = "=1.17.1"
 
 [dev-dependencies]
+slint = { version = "=1.17.1", default-features = false, features = ["renderer-software", "software-renderer-path"] }
 http-body-util = "0.1"
 tower = { version = "0.5", features = ["util"] }
 
