@@ -9,6 +9,8 @@ mod domain;
 mod mobile;
 mod providers;
 mod ui_model;
+#[cfg(test)]
+mod ui_tests;
 
 use crate::config::{AppConfig, AccountPreference, UsageBarColorMode};
 use crate::domain::{AccountRecord, CachedUsage, PendingReset, UsageSnapshot};
@@ -832,7 +834,7 @@ fn show_dashboard(ui: &MainWindow, anchor: Option<PanelAnchor>, native_xid_share
 }
 
 fn show_settings(ui: &MainWindow, anchor: Option<PanelAnchor>, native_xid_shared: &Arc<Mutex<Option<u32>>>) {
-    let settings_height = ui.get_desired_height_px().max(1.0);
+    let settings_height = ui_model::settings_panel_height(ui.get_dashboard_height_px());
     ui.set_settings_height_px(settings_height);
     ui.set_settings_visible(true);
     ui.set_desired_height_px(settings_height);

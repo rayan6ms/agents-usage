@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.15 — 2026-09-21
+
+- Give Settings a minimum height of 520 logical pixels even with zero or one enabled account, while keeping the main menu compact.
+- Add a headless UI regression check for opening Settings, refreshing while there, and returning to the dashboard.
+
 ## 0.4.14 — 2026-09-13
 
 - Keep each Codex home and its display name attached to that directory when sign-ins overlap.

@@ -201,6 +201,12 @@ pub fn plan_display_name(plan_type: Option<&str>) -> String {
     }
 }
 
+pub fn settings_panel_height(dashboard_height: f32) -> f32 {
+    // Settings needs a usable scroll viewport even with zero or one account.
+    // Keep taller dashboards unchanged, without enlarging the dashboard itself.
+    dashboard_height.max(520.0)
+}
+
 pub fn panel_height(records: &[AccountRecord], show_banked_resets: bool) -> f32 {
     let enabled_count = records.iter().filter(|record| record.enabled).count();
     if enabled_count == 0 {
@@ -558,6 +564,27 @@ mod tests {
         assert_eq!(hidden.reset_credits.row_count(), 0);
         assert!(!hidden.has_hidden_details);
         assert!(shown.row_height_px > hidden.row_height_px);
+    }
+
+    #[test]
+    fn settings_height_is_independent_of_small_dashboard_account_counts() {
+        let mut records = vec![AccountRecord {
+            id: "only".into(), home: PathBuf::new(), provider_id: "openai".into(),
+            display_name: "Only account".into(), color_name: "cyan".into(),
+            enabled: true, pin_short: false, expanded: false,
+            name_revealed: false, email_revealed: false,
+            confirm_credit_id: String::new(), snapshot: None, last_error: None,
+        }];
+        let dashboard_height = super::panel_height(&records, true);
+        assert!(dashboard_height < 520.0);
+        assert_eq!(super::settings_panel_height(dashboard_height), 520.0);
+        // Going back still uses the compact dashboard calculation.
+        assert_eq!(super::panel_height(&records, true), dashboard_height);
+        records[0].enabled = false;
+        assert_eq!(super::settings_panel_height(super::panel_height(&records, true)), 520.0);
+        assert_eq!(super::settings_panel_height(super::panel_height(&[], true)), 520.0);
+        assert_eq!(super::settings_panel_height(520.0), 520.0);
+        assert_eq!(super::settings_panel_height(super::PANEL_MAX_HEIGHT), super::PANEL_MAX_HEIGHT);
     }
 
     #[test]
