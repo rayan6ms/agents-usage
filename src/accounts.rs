@@ -18,17 +18,6 @@ pub fn reconcile(
     cache: Vec<CachedUsage>,
     homes: Vec<PathBuf>,
 ) -> Vec<CachedUsage> {
-    for pref in &mut config.accounts {
-        if pref.provider_id != providers::OPENAI { continue; }
-        let generated = pref.display_name.as_deref().is_some_and(|name| {
-            name.strip_prefix("codex").is_some_and(|suffix| suffix.chars().all(|c| c.is_ascii_digit()))
-        });
-        if generated {
-            if let Some(name) = pref.home.file_name().and_then(|value| value.to_str()).filter(|v| !v.is_empty()) {
-                pref.display_name = Some(name.strip_prefix('.').unwrap_or(name).to_string());
-            }
-        }
-    }
     // Read every home, including disabled ones, exactly once per pass. auth_time
     // measures a login; file mtime/iat alone could favor a routine token refresh.
     let mut identities = HashMap::new();

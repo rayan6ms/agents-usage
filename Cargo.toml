@@ -1,6 +1,6 @@
 [package]
 name = "agents-usage"
-version = "0.4.15"
+version = "0.4.16"
 edition = "2024"
 rust-version = "1.92"
 publish = false
@@ -44,11 +44,11 @@ scrypt = "0.11"
 whoami = "1.6"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-ksni = "0.3.6"
+ksni = { version = "0.3.6", default-features = false, features = ["async-io"] }
 raw-window-handle = "0.6"
-secret-service = { version = "5.1", default-features = false, features = ["rt-tokio-crypto-rust"] }
+secret-service = { version = "5.1", default-features = false, features = ["rt-async-io-crypto-rust"] }
 x11rb = "0.14.0"
-zbus = { version = "5", default-features = false, features = ["tokio"] }
+zbus = { version = "5", default-features = false, features = ["async-io"] }
 
 [target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
 tray-icon = "0.24.1"

@@ -997,6 +997,7 @@ fn source_account_name(provider_id: &str, path: &Path) -> String {
     path.file_name()
         .and_then(|value| value.to_str())
         .filter(|value| !value.is_empty())
+        .map(|value| value.strip_prefix('.').unwrap_or(value))
         .unwrap_or("OpenAI Codex")
         .to_string()
 }
@@ -2681,7 +2682,7 @@ mod tests {
         LaunchMode, PanelAnchor, PanelEdge, SCREEN_MARGIN_PX, desktop_uses_status_notifier, infer_panel_edge,
         launch_mode, mobile_lan_url, mobile_pairing_bundle, mobile_pairing_url, move_account, move_target, normalized_account_color,
         normalized_display_name, panel_position_for_size, placeholder_record, reconcile_cached_accounts,
-        tailscale_serve_matches,
+        source_account_name, tailscale_serve_matches,
     };
     use super::MobileEndpoints;
     use crate::config::{AccountPreference, AppConfig};
@@ -2689,6 +2690,7 @@ mod tests {
     use crate::providers;
     use base64::Engine;
     use std::fs;
+    use std::path::Path;
 
     #[test]
     fn only_an_explicit_open_argument_shows_the_window_at_launch() {
@@ -2830,6 +2832,12 @@ mod tests {
     }
 
     #[test]
+    fn openai_home_names_do_not_include_the_hidden_directory_prefix() {
+        assert_eq!(source_account_name(providers::OPENAI, Path::new("/tmp/.codex")), "codex");
+        assert_eq!(source_account_name(providers::OPENAI, Path::new("/tmp/.codex2")), "codex2");
+    }
+
+    #[test]
     fn cached_identity_keeps_duplicate_homes_and_preferences_separate() {
         let root = std::env::temp_dir().join(format!("agents-usage-identity-{}", uuid::Uuid::new_v4()));
         let old_home = root.join("old-shadow-home");
@@ -2904,7 +2912,9 @@ mod tests {
         };
         let homes = config.accounts.iter().filter(|pref| pref.provider_id == providers::OPENAI).map(|pref| pref.home.clone()).collect();
         crate::accounts::reconcile(&mut config, Vec::new(), homes);
-        assert_eq!(config.accounts[0].display_name.as_deref(), Some("codex"));
+        // Existing names may be intentional custom labels (including codexN),
+        // so reconciliation must not overwrite them based on the directory.
+        assert_eq!(config.accounts[0].display_name.as_deref(), Some("codex2"));
         assert!(!config.accounts[1].enabled);
         assert_eq!(config.accounts[1].duplicate_of.as_deref(), Some(newer.as_path()));
         assert!(config.accounts[2].enabled);

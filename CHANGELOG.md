@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.16 — 2026-09-29
+
+- Reduce Linux memory and thread overhead by using the runtime-agnostic async-io D-Bus integrations instead of an implicit multi-thread Tokio pool.
+- Preserve custom account names during reconciliation and display cleaner names for hidden `.codex` homes.
+- Persist mobile device activity timestamps so “last seen” information survives restarts.
+
 ## 0.4.15 — 2026-09-21
 
 - Give Settings a minimum height of 520 logical pixels even with zero or one enabled account, while keeping the main menu compact.

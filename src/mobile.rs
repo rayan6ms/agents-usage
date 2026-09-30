@@ -373,7 +373,7 @@ async fn pair(
 }
 
 async fn api_state(State(state): State<MobileServerState>, headers: HeaderMap) -> Response {
-    if !authorized(&headers, &state.config) {
+    if !authorized(&headers, &state.config, &state.tx, state.persist_config) {
         return unauthorized();
     }
     let config = state
@@ -414,7 +414,7 @@ async fn api_state(State(state): State<MobileServerState>, headers: HeaderMap) -
 }
 
 async fn api_health(State(state): State<MobileServerState>, headers: HeaderMap) -> Response {
-    if !authorized(&headers, &state.config) {
+    if !authorized(&headers, &state.config, &state.tx, state.persist_config) {
         return unauthorized();
     }
     let mut response = StatusCode::NO_CONTENT.into_response();
@@ -426,7 +426,7 @@ async fn api_health(State(state): State<MobileServerState>, headers: HeaderMap) 
 }
 
 async fn api_refresh(State(state): State<MobileServerState>, headers: HeaderMap) -> Response {
-    if !authorized(&headers, &state.config) {
+    if !authorized(&headers, &state.config, &state.tx, state.persist_config) {
         return unauthorized();
     }
     if let Ok(mut last_refresh) = state.last_forced_refresh.lock() {
@@ -459,7 +459,7 @@ async fn api_refresh(State(state): State<MobileServerState>, headers: HeaderMap)
 }
 
 async fn api_refresh_if_stale(State(state): State<MobileServerState>, headers: HeaderMap) -> Response {
-    if !authorized(&headers, &state.config) {
+    if !authorized(&headers, &state.config, &state.tx, state.persist_config) {
         return unauthorized();
     }
     if state.tx.send(WorkerCommand::RefreshIfStaleMobile).is_err() {
@@ -530,7 +530,12 @@ fn mobile_account(key: usize, account: AccountRecord) -> MobileAccount {
     }
 }
 
-fn authorized(headers: &HeaderMap, config: &Arc<Mutex<AppConfig>>) -> bool {
+fn authorized(
+    headers: &HeaderMap,
+    config: &Arc<Mutex<AppConfig>>,
+    tx: &UnboundedSender<WorkerCommand>,
+    persist_config: bool,
+) -> bool {
     let Some(token) = headers
         .get_all(COOKIE)
         .iter()
@@ -547,7 +552,8 @@ fn authorized(headers: &HeaderMap, config: &Arc<Mutex<AppConfig>>) -> bool {
     let supplied_hash = hash_token(&token);
     let now = chrono::Utc::now().timestamp();
     let Ok(mut config) = config.lock() else { return false; };
-    if let Some(device) = config.mobile.devices.iter_mut().find(|device| {
+    let mut last_seen_changed = false;
+    let authorized = if let Some(device) = config.mobile.devices.iter_mut().find(|device| {
             device_is_active(device, now)
                 && std::iter::once(&device.token_hash)
                     .chain(device.additional_token_hashes.iter())
@@ -555,11 +561,17 @@ fn authorized(headers: &HeaderMap, config: &Arc<Mutex<AppConfig>>) -> bool {
         }) {
         if device.last_seen_at.is_none_or(|last_seen| now - last_seen >= 60) {
             device.last_seen_at = Some(now);
+            last_seen_changed = true;
         }
         true
     } else {
         false
+    };
+    drop(config);
+    if authorized && last_seen_changed && persist_config {
+        let _ = tx.send(WorkerCommand::PersistSettings);
     }
+    authorized
 }
 
 pub fn create_pairing(config: &mut AppConfig, uses: u8) -> String {
