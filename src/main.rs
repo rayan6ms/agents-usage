@@ -39,9 +39,12 @@ const OPEN_REFRESH_FRESHNESS: Duration = Duration::from_secs(5);
 // Keep the phone's automatic refresh window aligned with the desktop panel so
 // reopening the companion does not intentionally show older data.
 const MOBILE_REFRESH_FRESHNESS: Duration = Duration::from_secs(5);
-const MAX_RPC_CONCURRENCY: usize = 8;
-const INTERACTIVE_REFRESH_CONCURRENCY: usize = 8;
-const INTERACTIVE_DISCOVERY_CONCURRENCY: usize = 2;
+// Codex usage reads launch a short-lived `codex app-server` process. Keep
+// those memory-heavy children serialized; parallel launches can otherwise
+// multiply their RSS into hundreds of megabytes during a refresh burst.
+const MAX_RPC_CONCURRENCY: usize = 1;
+const INTERACTIVE_REFRESH_CONCURRENCY: usize = 1;
+const INTERACTIVE_DISCOVERY_CONCURRENCY: usize = 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LaunchMode { Background, Open }
@@ -2067,7 +2070,7 @@ fn main() -> Result<(), slint::PlatformError> {
 
     slint::BackendSelector::new()
         .backend_name("winit".into())
-        .renderer_name("femtovg".into())
+        .renderer_name("software".into())
         .with_winit_event_loop_builder(event_loop_builder)
         .with_winit_window_attributes_hook(|attributes| {
             let attributes = attributes

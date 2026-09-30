@@ -74,7 +74,8 @@ assert 'mobile::serve' in main and '--mobile-pairing-url' in main
 assert 'activate_existing_instance_async(open_on_start)' in main
 assert 'RefreshAtStartup' not in main
 assert 'STARTUP_REFRESH_DELAY' not in main
-assert 'INTERACTIVE_REFRESH_CONCURRENCY: usize = 8' in main
+assert 'INTERACTIVE_REFRESH_CONCURRENCY: usize = 1' in main
+assert '.renderer_name("software".into())' in main
 assert 'load_usage_cache' in main and 'save_usage_cache' in main
 assert 'CheckPopupFocus' in main
 assert 'XinputRawButtonPress' not in main

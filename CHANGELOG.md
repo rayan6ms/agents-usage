@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.17 — 2026-09-30
+
+- Reduce steady Linux memory usage by selecting Slint's software renderer instead of the OpenGL/FemtoVG path.
+- Serialize Codex refresh subprocesses so concurrent account refreshes cannot multiply their memory footprint into large spikes.
+
 ## 0.4.16 — 2026-09-29
 
 - Reduce Linux memory and thread overhead by using the runtime-agnostic async-io D-Bus integrations instead of an implicit multi-thread Tokio pool.
