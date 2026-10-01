@@ -76,6 +76,7 @@ assert 'RefreshAtStartup' not in main
 assert 'STARTUP_REFRESH_DELAY' not in main
 assert 'INTERACTIVE_REFRESH_CONCURRENCY: usize = 1' in main
 assert '.renderer_name("software".into())' in main
+assert 'EmbedForSoftwareRenderer' in (root / 'build.rs').read_text()
 assert 'load_usage_cache' in main and 'save_usage_cache' in main
 assert 'CheckPopupFocus' in main
 assert 'XinputRawButtonPress' not in main

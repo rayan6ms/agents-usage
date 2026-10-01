@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.18 — 2026-10-01
+
+- Sharpen small and secondary text by embedding software-renderer glyphs at build time, avoiding blurry unhinted runtime outlines.
+
 ## 0.4.17 — 2026-09-30
 
 - Reduce steady Linux memory usage by selecting Slint's software renderer instead of the OpenGL/FemtoVG path.

@@ -18,8 +18,9 @@ fn snapshot(ui: &MainWindow, window: &MinimalSoftwareWindow, label: &str, scale:
     // Simulate the native resize requested by show_settings/show_dashboard.
     window.set_size(slint::LogicalSize::new(360.0, ui.get_desired_height_px()));
     let pixels = ui.window().take_snapshot().expect("render headless UI");
-    assert_eq!(pixels.width(), (360.0 * scale).round() as u32);
-    assert_eq!(pixels.height(), (ui.get_desired_height_px() * scale).round() as u32);
+    // The software backend truncates the logical-to-physical conversion.
+    assert_eq!(pixels.width(), (360.0 * scale) as u32);
+    assert_eq!(pixels.height(), (ui.get_desired_height_px() * scale) as u32);
     if let Some(directory) = std::env::var_os("AGENTS_USAGE_UI_TEST_OUTPUT") {
         use std::io::Write;
         let directory = PathBuf::from(directory);
@@ -44,7 +45,16 @@ fn settings_grows_from_one_account_and_back_restores_dashboard() {
         confirm_credit_id: String::new(), last_error: None,
         snapshot: Some(UsageSnapshot {
             email: Some("personal@example.com".into()), plan_type: Some("plus".into()),
-            bucket_name: None, windows: Vec::new(), reset_available_count: 0, reset_credits: Vec::new(),
+            bucket_name: None,
+            windows: vec![
+                crate::domain::RateWindow {
+                    label: None, used_percent: 25.0, duration_mins: Some(10_080), resets_at: None,
+                },
+                crate::domain::RateWindow {
+                    label: None, used_percent: 55.0, duration_mins: Some(300), resets_at: None,
+                },
+            ],
+            reset_available_count: 0, reset_credits: Vec::new(),
         }),
     }]));
     let config = Arc::new(Mutex::new(AppConfig::default()));
@@ -56,7 +66,7 @@ fn settings_grows_from_one_account_and_back_restores_dashboard() {
     show_dashboard(&ui, None, &native_xid);
     snapshot(&ui, &window, "dashboard", 1.0);
 
-    for scale in [1.0, 1.5, 2.0] {
+    for scale in [1.0, 1.25, 1.5, 1.75, 2.0] {
         show_settings(&ui, None, &native_xid);
         assert!(ui.get_settings_visible());
         assert_eq!(ui.get_settings_height_px(), 520.0);
@@ -69,6 +79,12 @@ fn settings_grows_from_one_account_and_back_restores_dashboard() {
         assert_eq!(ui.get_desired_height_px(), compact_height);
     }
     snapshot(&ui, &window, "dashboard-back", 1.0);
+    records.lock().unwrap()[0].expanded = true;
+    render_ui(&ui, &records, &config, &anchor, None);
+    show_dashboard(&ui, None, &native_xid);
+    for scale in [1.0, 1.25, 1.5, 1.75, 2.0] {
+        snapshot(&ui, &window, "dashboard-expanded", scale);
+    }
     records.lock().unwrap()[0].enabled = false;
     render_ui(&ui, &records, &config, &anchor, None);
     show_settings(&ui, None, &native_xid);
