@@ -14,12 +14,16 @@ impl Platform for HeadlessPlatform {
 }
 
 fn snapshot(ui: &MainWindow, window: &MinimalSoftwareWindow, label: &str, scale: f32) {
+    snapshot_at_width(ui, window, label, scale, 360.0);
+}
+
+fn snapshot_at_width(ui: &MainWindow, window: &MinimalSoftwareWindow, label: &str, scale: f32, width: f32) {
     window.dispatch_event(slint::platform::WindowEvent::ScaleFactorChanged { scale_factor: scale });
     // Simulate the native resize requested by show_settings/show_dashboard.
-    window.set_size(slint::LogicalSize::new(360.0, ui.get_desired_height_px()));
+    window.set_size(slint::LogicalSize::new(width, ui.get_desired_height_px()));
     let pixels = ui.window().take_snapshot().expect("render headless UI");
     // The software backend truncates the logical-to-physical conversion.
-    assert_eq!(pixels.width(), (360.0 * scale) as u32);
+    assert_eq!(pixels.width(), (width * scale) as u32);
     assert_eq!(pixels.height(), (ui.get_desired_height_px() * scale) as u32);
     if let Some(directory) = std::env::var_os("AGENTS_USAGE_UI_TEST_OUTPUT") {
         use std::io::Write;
@@ -38,6 +42,7 @@ fn settings_grows_from_one_account_and_back_restores_dashboard() {
     slint::platform::set_platform(Box::new(HeadlessPlatform(window.clone()))).unwrap();
     let ui = MainWindow::new().unwrap();
     ui.set_motion_enabled(false);
+    let now = chrono::Utc::now().timestamp();
     let records = Arc::new(Mutex::new(vec![AccountRecord {
         id: "test-account".into(), home: PathBuf::new(), provider_id: "openai".into(),
         display_name: "Personal".into(), color_name: "cyan".into(), enabled: true,
@@ -48,10 +53,12 @@ fn settings_grows_from_one_account_and_back_restores_dashboard() {
             bucket_name: None,
             windows: vec![
                 crate::domain::RateWindow {
-                    label: None, used_percent: 25.0, duration_mins: Some(10_080), resets_at: None,
+                    label: Some("Weekly".into()), used_percent: 25.0, duration_mins: Some(10_080),
+                    resets_at: Some(now + 2 * 24 * 60 * 60 + 23 * 60 * 60),
                 },
                 crate::domain::RateWindow {
-                    label: None, used_percent: 55.0, duration_mins: Some(300), resets_at: None,
+                    label: Some("5-hour".into()), used_percent: 55.0, duration_mins: Some(300),
+                    resets_at: Some(now + 4 * 60 * 60 + 25 * 60),
                 },
             ],
             reset_available_count: 0, reset_credits: Vec::new(),
@@ -84,6 +91,13 @@ fn settings_grows_from_one_account_and_back_restores_dashboard() {
     show_dashboard(&ui, None, &native_xid);
     for scale in [1.0, 1.25, 1.5, 1.75, 2.0] {
         snapshot(&ui, &window, "dashboard-expanded", scale);
+    }
+    // Bold, colored countdowns use different glyph metrics from the labels.
+    // Match the narrower window in the reported screenshot as well as fractional scaling.
+    config.lock().unwrap().color_reset_timers = true;
+    render_ui(&ui, &records, &config, &anchor, None);
+    for scale in [1.0, 1.25, 1.5, 1.75, 2.0] {
+        snapshot_at_width(&ui, &window, "dashboard-colored", scale, 355.0);
     }
     records.lock().unwrap()[0].enabled = false;
     render_ui(&ui, &records, &config, &anchor, None);

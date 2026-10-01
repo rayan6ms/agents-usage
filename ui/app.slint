@@ -116,13 +116,14 @@ component PlanBadge inherits Rectangle {
     }
 
     badge-text := Text {
-        width: parent.width - 10px;
+        width: parent.width;
         height: 16px;
         y: 3px;
-        x: 5px;
+        // Balance the visible Plus glyphs, not just their font advance width.
+        x: root.text == "Plus" ? -1px : 0px;
         text: root.text;
         color: Palette.foreground;
-        font-size: 8.5px;
+        font-size: 9.5px;
         font-weight: 600;
         opacity: 0.78;
         horizontal-alignment: center;
@@ -302,15 +303,15 @@ component ProviderMark inherits Rectangle {
     in property <string> provider-id: "openai";
     in property <color> accent;
     in property <bool> show-accent: true;
-    width: 27px;
-    height: 22px;
+    width: 29px;
+    height: 24px;
     background: transparent;
 
     if root.provider-id == "openai": Path {
         x: 1px;
         y: 2px;
-        width: 18px;
-        height: 18px;
+        width: 20px;
+        height: 20px;
         viewbox-width: 24;
         viewbox-height: 24;
         fill: white;
@@ -321,8 +322,8 @@ component ProviderMark inherits Rectangle {
     if root.provider-id != "openai": Image {
         x: 1px;
         y: 2px;
-        width: 18px;
-        height: 18px;
+        width: 20px;
+        height: 20px;
         source: root.provider-id == "anthropic"
             ? @image-url("../assets/providers/anthropic.svg")
             : root.provider-id == "google"
@@ -337,8 +338,8 @@ component ProviderMark inherits Rectangle {
     }
 
     if root.show-accent: AccentDot {
-        x: 19px;
-        y: 14px;
+        x: 21px;
+        y: 16px;
         width: 8px;
         height: 8px;
         accent: root.accent;
@@ -388,13 +389,13 @@ component UsageBar inherits Rectangle {
     in property <color> fill-color;
     in property <string> accessible-name;
     in property <string> accessible-value-text;
-    height: 5px;
+    height: 6px;
     accessible-role: progress-indicator;
     accessible-label: root.accessible-name;
     accessible-value: root.accessible-value-text;
     accessible-value-minimum: 0;
     accessible-value-maximum: 100;
-    border-radius: 2.5px;
+    border-radius: 3px;
     background: Palette.alternate-background;
     border-width: 1px;
     border-color: Palette.border;
@@ -404,7 +405,7 @@ component UsageBar inherits Rectangle {
         y: 1px;
         width: max(0px, (parent.width - 2px) * min(1, max(0, root.remaining)));
         height: parent.height - 2px;
-        border-radius: 1.5px;
+        border-radius: 2px;
         background: root.fill-color;
     }
 }
@@ -418,44 +419,56 @@ component LimitLine inherits Rectangle {
     in property <color> reset-color: Palette.foreground;
     in property <bool> show-reset-text: false;
     in property <bool> color-reset-timer: false;
-    height: 18px;
+    height: 20px;
     background: transparent;
 
     HorizontalLayout {
         width: parent.width;
         height: parent.height;
-        spacing: 5px;
-        HorizontalLayout {
-            spacing: 0px;
-            Text {
-                text: root.label;
-                color: Palette.foreground;
-                font-size: 10px;
-                opacity: 0.70;
-                vertical-alignment: center;
-            }
-            if root.show-reset-text: Text {
-                text: " • resets in ";
-                color: Palette.foreground;
-                font-size: 10px;
-                opacity: 0.70;
-                vertical-alignment: center;
-            }
-            if root.show-reset-text: Text {
-                text: root.reset-text;
-                color: root.color-reset-timer ? root.reset-color : Palette.foreground;
-                font-size: 10px;
-                font-weight: root.color-reset-timer ? 600 : 400;
-                opacity: root.color-reset-timer ? 0.96 : 0.70;
-                vertical-alignment: center;
+        spacing: 4px;
+        Rectangle {
+            // Keep both usage bars on the same track even when timer strings differ.
+            width: 124px;
+            height: parent.height;
+            clip: true;
+            HorizontalLayout {
+                width: parent.width;
+                height: parent.height;
+                spacing: 5px;
+                Text {
+                    height: parent.height;
+                    text: root.show-reset-text ? root.label + " • resets in" : root.label;
+                    color: Palette.foreground;
+                    font-size: 10.5px;
+                    opacity: 0.82;
+                    vertical-alignment: center;
+                }
+                if root.show-reset-text: Rectangle {
+                    width: 39px;
+                    height: parent.height;
+                    background: transparent;
+                    Text {
+                        width: parent.width;
+                        height: parent.height;
+                        // A wrapper keeps the layout from overriding this optical offset.
+                        y: 1px;
+                        text: root.reset-text;
+                        color: root.color-reset-timer ? root.reset-color : Palette.foreground;
+                        font-size: 9.5px;
+                        font-weight: root.color-reset-timer ? 600 : 400;
+                        opacity: root.color-reset-timer ? 0.96 : 0.82;
+                        vertical-alignment: center;
+                    }
+                }
             }
         }
         Rectangle {
-            height: 18px;
+            height: parent.height;
             horizontal-stretch: 1;
             background: transparent;
             UsageBar {
-                y: 6.5px;
+                // Match the visible label center, which sits below the line-box center.
+                y: (parent.height - self.height) / 2 + 1px;
                 width: parent.width;
                 remaining: root.remaining;
                 fill-color: root.accent;
@@ -464,7 +477,8 @@ component LimitLine inherits Rectangle {
             }
         }
         Text {
-            width: 34px;
+            // Still fits 100%, while giving the bar another 4px on the right.
+            width: 30px;
             text: root.percent-text;
             color: Palette.foreground;
             font-size: 10.5px;
@@ -540,16 +554,16 @@ component DetailLine inherits HorizontalLayout {
     Text {
         text: root.label;
         color: Palette.foreground;
-        font-size: 9.5px;
-        opacity: 0.58;
+        font-size: 10px;
+        opacity: 0.70;
         horizontal-stretch: 1;
         vertical-alignment: center;
     }
     Text {
         text: root.value;
         color: Palette.foreground;
-        font-size: 9.5px;
-        opacity: 0.84;
+        font-size: 10px;
+        opacity: 0.88;
         vertical-alignment: center;
         horizontal-alignment: right;
     }
@@ -578,7 +592,7 @@ component ResetCreditRow inherits Rectangle {
             height: 14px;
             text: root.credit.title;
             color: Palette.foreground;
-            font-size: 9.5px;
+            font-size: 10px;
             vertical-alignment: center;
             overflow: elide;
         }
@@ -589,8 +603,8 @@ component ResetCreditRow inherits Rectangle {
             height: 14px;
             text: root.credit.expiry;
             color: Palette.foreground;
-            font-size: 8.5px;
-            opacity: 0.56;
+            font-size: 9.5px;
+            opacity: 0.68;
             vertical-alignment: center;
             overflow: elide;
         }
@@ -611,8 +625,8 @@ component ResetCreditRow inherits Rectangle {
         height: parent.height;
         text: "Confirm reset use?";
         color: Palette.foreground;
-        font-size: 8.7px;
-        opacity: 0.82;
+        font-size: 9.5px;
+        opacity: 0.86;
         horizontal-alignment: right;
         vertical-alignment: center;
         overflow: elide;
@@ -671,14 +685,14 @@ component AccountRow inherits Rectangle {
     VerticalLayout {
         width: parent.width;
         height: parent.height - 1px;
-        padding-top: 5px;
+        padding-top: 4px;
         padding-bottom: 6px;
         padding-left: 10px;
         padding-right: 10px;
         spacing: 2px;
 
         HorizontalLayout {
-            height: 22px;
+            height: 24px;
             spacing: 7px;
             ProviderMark {
                 provider-id: root.account.provider-id;
@@ -687,7 +701,7 @@ component AccountRow inherits Rectangle {
             }
             Rectangle {
                 width: min(132px, name-text.preferred-width);
-                height: 22px;
+                height: 24px;
                 background: transparent;
                 accessible-role: button;
                 accessible-label: root.blur-names && !root.account.name-revealed
@@ -728,8 +742,8 @@ component AccountRow inherits Rectangle {
                         ? root.account.masked-email
                         : root.account.email;
                     color: Palette.foreground;
-                    font-size: 9.5px;
-                    opacity: root.blur-emails && !root.account.email-revealed ? 0.48 : 0.56;
+                    font-size: 10px;
+                    opacity: root.blur-emails && !root.account.email-revealed ? 0.56 : 0.68;
                     overflow: elide;
                     horizontal-alignment: right;
                     vertical-alignment: center;
@@ -750,7 +764,7 @@ component AccountRow inherits Rectangle {
                 accessible-action-default => { root.toggle-details(root.account.id); }
                 Chevron {
                     x: 1px;
-                    y: 1px;
+                    y: 0.5px;
                     expanded: root.account.expanded;
                     motion-enabled: root.motion-enabled;
                 }
@@ -769,19 +783,19 @@ component AccountRow inherits Rectangle {
             color-reset-timer: root.color-reset-timers;
         }
         if !root.account.has-usage: Text {
-            height: 18px;
+            height: 20px;
             text: root.account.error-text == "" ? "Checking usage…" : root.account.error-text;
             color: Palette.foreground;
-            font-size: 9.5px;
-            opacity: 0.55;
+            font-size: 10px;
+            opacity: 0.70;
             vertical-alignment: center;
         }
         if root.account.has-usage && root.account.has-error: Text {
-            height: 18px;
+            height: 20px;
             text: root.account.error-text;
             color: Palette.foreground;
-            font-size: 9.5px;
-            opacity: 0.62;
+            font-size: 10px;
+            opacity: 0.72;
             vertical-alignment: center;
             overflow: elide;
         }
@@ -873,8 +887,8 @@ component SettingRow inherits Rectangle {
         height: 16px;
         text: root.subtitle;
         color: Palette.foreground;
-        font-size: 8.5px;
-        opacity: 0.55;
+        font-size: 9.5px;
+        opacity: 0.68;
         vertical-alignment: top;
         overflow: elide;
     }
@@ -1048,8 +1062,8 @@ component HsvColorPicker inherits Rectangle {
         height: 26px;
         text: "Custom";
         color: Palette.foreground;
-        font-size: 8px;
-        opacity: 0.58;
+        font-size: 9px;
+        opacity: 0.68;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
@@ -1073,9 +1087,9 @@ component UsageBarModeButton inherits Rectangle {
     Text {
         text: root.label;
         color: Palette.foreground;
-        font-size: 9px;
+        font-size: 9.5px;
         font-weight: root.selected ? 600 : 400;
-        opacity: root.selected ? 0.95 : 0.62;
+        opacity: root.selected ? 0.95 : 0.72;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
@@ -1233,8 +1247,8 @@ component AccountSettings inherits Rectangle {
                 height: 16px;
                 text: root.account.email == "" ? root.account.id : root.account.email;
                 color: Palette.foreground;
-                font-size: 8.5px;
-                opacity: 0.55;
+                font-size: 9.5px;
+                opacity: 0.68;
                 vertical-alignment: center;
                 overflow: elide;
             }
@@ -1341,7 +1355,7 @@ component MobileActionButton inherits Rectangle {
     Text {
         text: root.label;
         color: root.primary ? Palette.background : Palette.foreground;
-        font-size: 9px;
+        font-size: 9.5px;
         font-weight: root.primary ? 600 : 400;
         horizontal-alignment: center;
         vertical-alignment: center;
@@ -1385,8 +1399,8 @@ component MobileCompanionSettings inherits Rectangle {
                 ? "LAN · access off"
                 : root.lan-url == "" ? "LAN address unavailable" : "LAN · " + root.lan-url;
             color: Palette.foreground;
-            font-size: 8.5px;
-            opacity: 0.62;
+            font-size: 9.5px;
+            opacity: 0.68;
             overflow: elide;
         }
         if root.enabled: SettingRow {
@@ -1399,8 +1413,8 @@ component MobileCompanionSettings inherits Rectangle {
             height: 16px;
             text: root.tailscale-url == "" ? "Tailscale · not detected" : "Tailscale · " + root.tailscale-url;
             color: Palette.foreground;
-            font-size: 8.5px;
-            opacity: 0.62;
+            font-size: 9.5px;
+            opacity: 0.68;
             overflow: elide;
         }
         if root.enabled: HorizontalLayout {
@@ -1445,8 +1459,8 @@ component MobileCompanionSettings inherits Rectangle {
                     vertical-stretch: 1;
                     text: "Agents Usage opens and pairs every available LAN/Tailscale address automatically. This QR expires in 10 minutes.";
                     color: Palette.foreground;
-                    font-size: 8.5px;
-                    opacity: 0.6;
+                    font-size: 9.5px;
+                    opacity: 0.68;
                     wrap: word-wrap;
                 }
                 MobileActionButton {
@@ -1459,9 +1473,9 @@ component MobileCompanionSettings inherits Rectangle {
             height: 18px;
             text: "Paired phones";
             color: Palette.foreground;
-            font-size: 9px;
+            font-size: 9.5px;
             font-weight: 600;
-            opacity: 0.58;
+            opacity: 0.68;
             vertical-alignment: bottom;
         }
         for device in root.devices: HorizontalLayout {
@@ -1470,7 +1484,7 @@ component MobileCompanionSettings inherits Rectangle {
             VerticalLayout {
                 vertical-stretch: 1;
                 Text { text: device.name; color: Palette.foreground; font-size: 9.5px; vertical-alignment: bottom; }
-                Text { text: device.detail; color: Palette.foreground; font-size: 8px; opacity: 0.52; vertical-alignment: top; }
+                Text { text: device.detail; color: Palette.foreground; font-size: 9px; opacity: 0.62; vertical-alignment: top; }
             }
             MobileActionButton {
                 width: 58px;
@@ -1590,7 +1604,7 @@ export component MainWindow inherits Window {
                 }
                 Text {
                     x: 38px;
-                    y: 0px;
+                    y: 1px;
                     width: parent.width - 112px;
                     height: 40px;
                     text: "Agents usage";
@@ -1773,9 +1787,9 @@ export component MainWindow inherits Window {
                             height: 22px;
                             text: "Accounts";
                             color: Palette.foreground;
-                            font-size: 9px;
+                            font-size: 9.5px;
                             font-weight: 600;
-                            opacity: 0.58;
+                            opacity: 0.68;
                             vertical-alignment: bottom;
                         }
                         Rectangle { height: 4px; background: transparent; }
@@ -1801,8 +1815,8 @@ export component MainWindow inherits Window {
                             height: 28px;
                             text: root.accounts-summary;
                             color: Palette.foreground;
-                            font-size: 8.5px;
-                            opacity: 0.48;
+                            font-size: 9.5px;
+                            opacity: 0.62;
                             vertical-alignment: center;
                         }
                 }

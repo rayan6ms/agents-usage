@@ -94,7 +94,8 @@ pub fn account_view(
         0.0
     };
     let target_detail_height = detail_target_height(detail_windows.len(), reset_count > 0, credits.len());
-    let row_height = 53.0
+    // Header (24) + primary limit line (20) + vertical padding (10) + gap (2).
+    let row_height = 56.0
         + if show_short { 20.0 } else { 0.0 }
         + if record.last_error.is_some() && long.is_some() { 18.0 } else { 0.0 }
         + detail_height;

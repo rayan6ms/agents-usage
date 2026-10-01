@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.19 — 2026-10-01
+
+- Optically align the dashboard header, reset timers, usage bars, and plan badges at small sizes.
+
 ## 0.4.18 — 2026-10-01
 
 - Sharpen small and secondary text by embedding software-renderer glyphs at build time, avoiding blurry unhinted runtime outlines.
