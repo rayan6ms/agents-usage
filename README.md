@@ -65,7 +65,7 @@ See the [complete phone setup and troubleshooting guide](docs/mobile-companion.m
 
 - Cursor and Grok quota access depends on authenticated first-party endpoints used by their current clients; provider-side changes can require an adapter update.
 - The app relies on existing sign-ins in the providers' official CLIs; it does not perform sign-in or sign-out.
-- Linux tray placement is designed for GNOME and KDE Plasma. Other desktop environments may fall back to their standard StatusNotifier behavior.
+- Linux tray placement is designed for GNOME Shell 49–51 and KDE Plasma. Other desktop environments may fall back to their standard StatusNotifier behavior.
 - Windows and macOS packages are built and verified on native GitHub runners, but still need broader real-device testing.
 
 ## Build from source
