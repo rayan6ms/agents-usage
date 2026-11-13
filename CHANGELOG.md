@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.20 — 2026-11-13
+
+- Enable the GNOME Shell tray integration on GNOME 51, retaining GNOME 49 and 50 support.
+
 ## 0.4.19 — 2026-10-01
 
 - Optically align the dashboard header, reset timers, usage bars, and plan badges at small sizes.
