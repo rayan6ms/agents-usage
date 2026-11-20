@@ -514,7 +514,7 @@ fn mobile_account(key: usize, account: AccountRecord) -> MobileAccount {
         .collect();
     MobileAccount {
         key,
-        provider_id: account.provider_id,
+        provider_id: crate::ui_model::icon_provider(&account.provider_id).into(),
         masked_display_name: crate::ui_model::mask_account_name(&account.display_name),
         display_name: account.display_name,
         color: account.color_name,
