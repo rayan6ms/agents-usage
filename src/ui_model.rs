@@ -109,7 +109,7 @@ pub fn account_view(
 
     AccountView {
         id: record.id.clone().into(),
-        provider_id: record.provider_id.clone().into(),
+        provider_id: icon_provider(&record.provider_id).into(),
         display_name: record.display_name.clone().into(),
         masked_display_name: mask_account_name(&record.display_name).into(),
         color_name: record.color_name.clone().into(),
@@ -174,6 +174,14 @@ pub fn account_view(
     }
 }
 
+pub(crate) fn icon_provider(provider_id: &str) -> &str {
+    if provider_id == crate::antigravity::ID {
+        crate::providers::GOOGLE
+    } else {
+        provider_id
+    }
+}
+
 pub fn plan_display_name(plan_type: Option<&str>) -> String {
     let Some(plan_type) = plan_type.map(str::trim).filter(|value| !value.is_empty()) else {
         return String::new();
@@ -183,6 +191,9 @@ pub fn plan_display_name(plan_type: Option<&str>) -> String {
         "go" => "Go".into(),
         "plus" => "Plus".into(),
         "pro" => "Pro".into(),
+        "google ai pro" => "Google AI Pro".into(),
+        "google ai ultra" => "Google AI Ultra".into(),
+        "google ai plus" => "Google AI Plus".into(),
         "team" => "Team".into(),
         "business" => "Business".into(),
         "enterprise" => "Enterprise".into(),

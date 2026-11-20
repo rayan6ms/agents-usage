@@ -2,7 +2,7 @@
 //! Preferences belong to a provider/home pair, never to an email address.
 use crate::config::{AccountPreference, AppConfig};
 use crate::domain::{CachedUsage, UsageSnapshot};
-use crate::{account_id, codex, normalized_account_email, providers};
+use crate::{account_id, antigravity, codex, normalized_account_email, providers};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -45,7 +45,21 @@ pub fn reconcile(
         let id = account_id(&pref.provider_id, &pref.home);
         let local = identities.get(&id).and_then(Option::as_ref);
         let mut snapshot = cached.get(&id).cloned();
-        if let Some((email, login_time)) = local {
+        if pref.provider_id == antigravity::ID {
+            let email = antigravity::local_email(&pref.home);
+            let identity = normalized_account_email(email.as_deref());
+            let previous = pref.identity_email.as_deref();
+            if identity.as_deref() != previous
+                && pref.display_name.as_deref() == previous.and_then(|email| email.split('@').next())
+            {
+                pref.display_name = None;
+            }
+            pref.identity_email = identity.clone();
+            let cached_identity = snapshot.as_ref().and_then(|snapshot| snapshot.email.as_deref());
+            if identity != normalized_account_email(cached_identity) || identity.is_none() {
+                snapshot = email.map(identity_snapshot);
+            }
+        } else if let Some((email, login_time)) = local {
             let previous = pref.identity_email.as_deref();
             if normalized_account_email(previous).as_ref() != Some(email) {
                 // Update an old auto-generated email label, but preserve custom names.

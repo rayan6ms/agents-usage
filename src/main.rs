@@ -3,6 +3,7 @@
 
 mod codex;
 mod accounts;
+mod antigravity;
 mod config;
 mod discovery;
 mod domain;
@@ -1407,6 +1408,7 @@ async fn discover_new_accounts(
                     Some(codex_path) => codex::read_openai_identity(codex_path, &candidate.home).await.ok().flatten(),
                     None => None,
                 },
+                Err(_) if candidate.provider_id == antigravity::ID => antigravity::local_email(&candidate.home),
                 Err(_) => None,
             };
             Some((order, candidate, result, identity_email))

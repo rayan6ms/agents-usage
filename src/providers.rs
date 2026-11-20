@@ -1,4 +1,4 @@
-use crate::codex;
+use crate::{antigravity, codex};
 use crate::config::AppConfig;
 use crate::discovery;
 use crate::domain::{RateWindow, UsageSnapshot};
@@ -93,6 +93,7 @@ pub fn display_name(provider_id: &str) -> &'static str {
         OPENCODE => "OpenCode Go",
         ANTHROPIC => "Claude",
         GOOGLE => "Gemini",
+        antigravity::ID => "Antigravity",
         CURSOR => "Cursor",
         XAI => "Grok",
         _ => "Agent",
@@ -142,6 +143,8 @@ pub fn candidates(config: &AppConfig) -> Vec<ProviderCandidate> {
                 home: gemini,
             });
         }
+
+        candidates.extend(antigravity::candidates(&home));
 
         let cursor = home.join(".cursor");
         if locate_user_executable(&["cursor-agent"], &home).is_some()
@@ -195,6 +198,7 @@ pub fn is_marked(provider_id: &str, home: &Path) -> bool {
                 || home.join("gemini-credentials.json").is_file()
                 || home.join("google_accounts.json").is_file()
         }
+        antigravity::ID => antigravity::local_email(home).is_some(),
         CURSOR => {
             let user_home = home.parent().unwrap_or(home);
             cursor_auth_path(user_home).is_file() || home.is_dir()
@@ -221,6 +225,7 @@ pub async fn read_account(
         OPENCODE => read_opencode_go(&candidate.home).await,
         ANTHROPIC => read_claude(&candidate.home).await,
         GOOGLE => read_gemini(&candidate.home).await,
+        antigravity::ID => antigravity::read_account(&candidate.home).await,
         CURSOR => read_cursor(&candidate.home).await,
         XAI => read_grok(&candidate.home).await,
         _ => Err(ProviderError::Message(
@@ -229,7 +234,7 @@ pub async fn read_account(
     }
 }
 
-fn http_client(provider: &'static str) -> Result<Client, ProviderError> {
+pub(crate) fn http_client(provider: &'static str) -> Result<Client, ProviderError> {
     Client::builder()
         .timeout(HTTP_TIMEOUT)
         .user_agent(concat!("agents-usage/", env!("CARGO_PKG_VERSION")))
@@ -1470,7 +1475,7 @@ fn first_number(value: &Value, keys: &[&str]) -> Option<f64> {
     keys.iter().find_map(|key| number(value.get(*key)))
 }
 
-fn timestamp(value: Option<&Value>) -> Option<i64> {
+pub(crate) fn timestamp(value: Option<&Value>) -> Option<i64> {
     let value = value?;
     if let Some(number) = value.as_i64() {
         return Some(if number > 10_000_000_000 {

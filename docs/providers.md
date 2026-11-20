@@ -10,6 +10,7 @@ Agents Usage discovers providers from the same local state their official comman
 | [OpenCode Go](https://dev.opencode.ai/docs/go/) | OpenCode with an active `opencode-go` connection | `opencode.ai/zen/go/v1/usage` | Rolling 5-hour, weekly, and monthly windows |
 | [Anthropic Claude](https://code.claude.com/docs/en/statusline) | Claude Code subscription sign-in | Anthropic OAuth usage endpoint used by Claude Code | Session, weekly, and any model-scoped windows returned for the account |
 | [Google Gemini](https://github.com/google-gemini/gemini-cli) | Gemini CLI Google OAuth sign-in | Gemini Code Assist `retrieveUserQuota` | Every model quota bucket and its reset time |
+| [Google Antigravity](https://antigravity.google/docs/models) | Personal Google account signed in to Antigravity in T3 Code | Antigravity subscription and quota-summary responses | Google AI plan and the shared and model-specific quota windows returned by Google |
 | [Cursor](https://docs.cursor.com/en/cli/reference/authentication) | Cursor Agent CLI on `PATH`, signed in | Cursor's authenticated usage-summary endpoint | Included, Auto, and API usage; individual and team-plan fallbacks |
 | [xAI Grok](https://x.ai/news/grok-build-cli) | Grok CLI sign-in | Grok CLI's authenticated billing endpoint | Included-credit usage and the returned weekly or monthly period |
 
@@ -28,6 +29,12 @@ Cursor and Grok do not currently document these usage endpoints as stable public
 OpenAI Codex is queried through its local App Server, so Agents Usage never reads its token. The other providers do not expose an equivalent local usage service; for them Agents Usage reads the existing CLI credential only in memory and sends it solely to that provider's first-party HTTPS quota endpoint. Credentials are never included in the usage cache, mobile API, logs, or phone companion.
 
 The Gemini adapter refreshes an expired access token with the installed-application OAuth client published by Gemini CLI, without changing the CLI's credential file. Claude asks the installed Claude CLI to validate/refresh its sign-in before reading usage. On macOS it supports Claude Code's Keychain-backed credential as well as its configuration file. Grok delegates expired-session refresh to its installed CLI and then rereads the credential; Cursor reports an expired sign-in without modifying it.
+
+## Google Antigravity in T3 Code
+
+Sign in with your personal Google account under **Settings → Providers → Antigravity** in T3 Code, then press **Refresh** in Agents Usage. The account badge uses the subscription tier returned by Google. The Gemini five-hour and weekly bars show the shared quota used by models such as Gemini 4 Neon. Expand the account to see other quota windows Google returns.
+
+Agents Usage reads the existing sign-in from T3 Code's local profile and sends its access token only to Google's first-party endpoints. It delegates renewal to the runtime installed by T3 Code. If renewal fails, open Antigravity in T3 Code to renew the sign-in, then refresh Agents Usage. Discovery uses `~/.t3` by default and honors an absolute `T3CODE_HOME`.
 
 ## Troubleshooting
 

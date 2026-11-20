@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.0 — 2026-11-20
+
+- Discover personal Google Antigravity sign-ins from T3 Code and show the Google AI plan, shared Gemini quota, and any additional quota windows Google reports.
+- Update the Android Gradle wrapper to 8.14.8 with its verified distribution checksum.
+
 ## 0.4.20 — 2026-11-13
 
 - Enable the GNOME Shell tray integration on GNOME 51, retaining GNOME 49 and 50 support.
