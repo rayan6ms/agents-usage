@@ -46,19 +46,9 @@ pub fn reconcile(
         let local = identities.get(&id).and_then(Option::as_ref);
         let mut snapshot = cached.get(&id).cloned();
         if pref.provider_id == antigravity::ID {
-            let email = antigravity::local_email(&pref.home);
-            let identity = normalized_account_email(email.as_deref());
-            let previous = pref.identity_email.as_deref();
-            if identity.as_deref() != previous
-                && pref.display_name.as_deref() == previous.and_then(|email| email.split('@').next())
-            {
-                pref.display_name = None;
-            }
-            pref.identity_email = identity.clone();
-            let cached_identity = snapshot.as_ref().and_then(|snapshot| snapshot.email.as_deref());
-            if identity != normalized_account_email(cached_identity) || identity.is_none() {
-                snapshot = email.map(identity_snapshot);
-            }
+            snapshot = config.antigravity_report.as_ref()
+                .filter(|_| pref.home == antigravity::manual_home())
+                .map(antigravity::SavedQuota::snapshot);
         } else if let Some((email, login_time)) = local {
             let previous = pref.identity_email.as_deref();
             if normalized_account_email(previous).as_ref() != Some(email) {

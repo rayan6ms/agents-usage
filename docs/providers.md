@@ -10,7 +10,7 @@ Agents Usage discovers providers from the same local state their official comman
 | [OpenCode Go](https://dev.opencode.ai/docs/go/) | OpenCode with an active `opencode-go` connection | `opencode.ai/zen/go/v1/usage` | Rolling 5-hour, weekly, and monthly windows |
 | [Anthropic Claude](https://code.claude.com/docs/en/statusline) | Claude Code subscription sign-in | Anthropic OAuth usage endpoint used by Claude Code | Session, weekly, and any model-scoped windows returned for the account |
 | [Google Gemini](https://github.com/google-gemini/gemini-cli) | Gemini CLI Google OAuth sign-in | Gemini Code Assist `retrieveUserQuota` | Every model quota bucket and its reset time |
-| [Google Antigravity](https://antigravity.google/docs/models) | Personal Google account signed in to Antigravity in T3 Code | Antigravity subscription and quota-summary responses | Google AI plan and the shared and model-specific quota windows returned by Google |
+| [Google Antigravity](https://antigravity.google/docs/cli/commands/usage) | Signed in to Google’s standalone Antigravity CLI | Local import of CLI output | Reported quota windows and reset times |
 | [Cursor](https://docs.cursor.com/en/cli/reference/authentication) | Cursor Agent CLI on `PATH`, signed in | Cursor's authenticated usage-summary endpoint | Included, Auto, and API usage; individual and team-plan fallbacks |
 | [xAI Grok](https://x.ai/news/grok-build-cli) | Grok CLI sign-in | Grok CLI's authenticated billing endpoint | Included-credit usage and the returned weekly or monthly period |
 
@@ -30,11 +30,19 @@ OpenAI Codex is queried through its local App Server, so Agents Usage never read
 
 The Gemini adapter refreshes an expired access token with the installed-application OAuth client published by Gemini CLI, without changing the CLI's credential file. Claude asks the installed Claude CLI to validate/refresh its sign-in before reading usage. On macOS it supports Claude Code's Keychain-backed credential as well as its configuration file. Grok delegates expired-session refresh to its installed CLI and then rereads the credential; Cursor reports an expired sign-in without modifying it.
 
-## Google Antigravity in T3 Code
+## Google Antigravity quota
 
-Sign in with your personal Google account under **Settings → Providers → Antigravity** in T3 Code, then press **Refresh** in Agents Usage. The account badge uses the subscription tier returned by Google. The Gemini five-hour and weekly bars show the shared quota used by models such as Gemini 4 Neon. Expand the account to see other quota windows Google returns.
+Sign in once inside [Google’s standalone Antigravity CLI](https://antigravity.google/docs/getting-started/?tab=cli) with the account whose usage you want to see. From your terminal, run:
 
-Agents Usage reads the existing sign-in from T3 Code's local profile and sends its access token only to Google's first-party endpoints. It delegates renewal to the runtime installed by T3 Code. If renewal fails, open Antigravity in T3 Code to renew the sign-in, then refresh Agents Usage. Discovery uses `~/.t3` by default and honors an absolute `T3CODE_HOME`.
+```sh
+agy -p /usage --output-format json | agents-usage --import-antigravity-usage
+```
+
+In Agents Usage, **Settings → Antigravity quota → Copy import command** copies this command. The dashboard and paired phone companion display the imported percentages and reset times within a few seconds. Run the command again whenever you want fresh quota. The bars show the last imported reading, and the settings show when it was imported. A failed import keeps the previous reading.
+
+If you use the standalone Antigravity CLI interactively, its [documented status line](https://antigravity.google/docs/cli/statusline/) can also send quota to the importer. Set its status-line command to `agents-usage --import-antigravity-usage --quiet` if you want that feed. This replaces the current status-line command, so preserve any existing customization you want to keep. Antigravity supplies the data, and Agents Usage stores only the relevant quota and any reported account and plan. T3 Code’s ACP sessions use a separate profile and don’t run the standalone CLI’s status line.
+
+Agents Usage receives the report on stdin. It does not start `agy`, open an Antigravity connection, or read Google sign-in files for this feature.
 
 ## Troubleshooting
 

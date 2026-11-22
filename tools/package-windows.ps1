@@ -15,6 +15,8 @@ New-Item $Dist -ItemType Directory -Force | Out-Null
 Copy-Item $Binary (Join-Path $Stage "agents-usage.exe")
 Copy-Item (Join-Path $Root "README.md") $Stage
 Copy-Item (Join-Path $Root "LICENSE") $Stage
+Copy-Item (Join-Path $Root "THIRD_PARTY_ASSETS.md") $Stage
+Copy-Item (Join-Path $Root "third_party") $Stage -Recurse
 Remove-Item $Archive -Force -ErrorAction SilentlyContinue
 Compress-Archive -Path "$Stage\*" -DestinationPath $Archive -CompressionLevel Optimal
 if ((Get-Item $Archive).Length -le 0) { throw "Windows package is empty" }

@@ -1,409 +1,325 @@
+use crate::config::{self, AppConfig};
 use crate::domain::{RateWindow, UsageSnapshot};
-use crate::providers::{self, ProviderCandidate, ProviderError, ProviderReading};
-use chrono::{DateTime, Utc};
-use reqwest::{Client, StatusCode};
-use serde::Deserialize;
-use serde_json::{Value, json};
-use std::collections::HashSet;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::fs;
-use std::io::Read;
-use std::path::{Path, PathBuf};
-use std::process::Stdio;
-use std::time::Duration;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::process::Command;
+use std::io::{self, Read};
+use std::path::PathBuf;
 
 pub const ID: &str = "antigravity";
-const LABEL: &str = "Antigravity";
-const PROFILE_DIR: &str = "antigravity-acp";
-const TOKEN_FILE: &str = "antigravity-oauth-token";
-const USER_AGENT: &str = "antigravity/hub/2.24.0";
-const HOSTS: [&str; 2] = [
-    "daily-cloudcode-pa.googleapis.com",
-    "cloudcode-pa.googleapis.com",
-];
+pub const IMPORT_COMMAND: &str =
+    "agy -p /usage --output-format json | agents-usage --import-antigravity-usage";
+const MAX_REPORT_BYTES: u64 = 1024 * 1024;
 
-#[derive(Deserialize)]
-struct Credential {
-    token: Token,
-    auth_method: String,
-    id_token_email: String,
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+pub struct SavedQuota {
+    windows: Vec<QuotaWindow>,
+    email: Option<String>,
+    plan: Option<String>,
+    saved_at: i64,
 }
 
-#[derive(Deserialize)]
-struct Token {
-    access_token: String,
-    expiry: String,
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+struct QuotaWindow {
+    id: String,
+    remaining: f32,
+    reset_at: Option<i64>,
 }
 
-impl Token {
-    fn expired(&self) -> bool {
-        DateTime::parse_from_rfc3339(&self.expiry).map_or(true, |expiry| expiry <= Utc::now())
-    }
-}
-
-fn credential(profile: &Path) -> Option<Credential> {
-    let profile = profile.join(PROFILE_DIR);
-    let settings: Value =
-        serde_json::from_slice(&read_profile_file(&profile.join("settings.json"))?).ok()?;
-    if settings.pointer("/auth/type")?.as_str()? != "oauth-personal" {
-        return None;
-    }
-    let credential: Credential =
-        serde_json::from_slice(&read_profile_file(&profile.join(TOKEN_FILE))?).ok()?;
-    (credential.auth_method == "consumer" && !credential.id_token_email.trim().is_empty())
-        .then_some(credential)
-}
-
-fn read_profile_file(path: &Path) -> Option<Vec<u8>> {
-    let file = fs::File::open(path).ok()?;
-    let mut bytes = Vec::new();
-    file.take(65_537).read_to_end(&mut bytes).ok()?;
-    (bytes.len() <= 65_536).then_some(bytes)
-}
-
-pub fn local_email(profile: &Path) -> Option<String> {
-    credential(profile).map(|value| value.id_token_email)
-}
-
-pub fn candidates(home: &Path) -> Vec<ProviderCandidate> {
-    let t3 = std::env::var_os("T3CODE_HOME")
-        .map(PathBuf::from)
-        .filter(|path| path.is_absolute())
-        .unwrap_or_else(|| home.join(".t3"));
-    let Ok(profiles) = fs::read_dir(t3.join("userdata/providers/antigravity")) else {
-        return Vec::new();
-    };
-    let mut homes: Vec<_> = profiles
-        .flatten()
-        .map(|entry| entry.path())
-        .filter(|profile| local_email(profile).is_some())
-        .collect();
-    homes.sort();
-    homes
-        .into_iter()
-        .map(|home| ProviderCandidate {
-            provider_id: ID.into(),
-            home,
-        })
-        .collect()
-}
-
-fn sign_in_error() -> ProviderError {
-    ProviderError::Message(
-        "Open Antigravity in T3 Code to renew its Google sign-in, then refresh".into(),
-    )
-}
-
-fn request_error(source: reqwest::Error) -> ProviderError {
-    if matches!(
-        source.status(),
-        Some(StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
-    ) {
-        return sign_in_error();
-    }
-    ProviderError::Request {
-        provider: LABEL,
-        source,
-    }
-}
-
-async fn google_post(client: &Client, token: &str, method: &str) -> Result<Value, ProviderError> {
-    let mut error = ProviderError::Message("Antigravity could not be reached".into());
-    for host in HOSTS {
-        let response = client
-            .post(format!("https://{host}/v1internal:{method}"))
-            .header(reqwest::header::USER_AGENT, USER_AGENT)
-            .bearer_auth(token)
-            .json(&json!({}))
-            .send()
-            .await
-            .and_then(reqwest::Response::error_for_status);
-        match response {
-            Ok(response) => return response.json().await.map_err(request_error),
-            Err(source) => error = request_error(source),
-        }
-    }
-    Err(error)
-}
-
-fn plan_name(value: &Value) -> Option<String> {
-    let paid_tier = value
-        .pointer("/paidTier/name")
-        .and_then(Value::as_str)
-        .map(str::trim);
-    if let Some(name) = paid_tier.filter(|name| !name.is_empty()) {
-        return Some(name.into());
-    }
-    match value.pointer("/currentTier/id").and_then(Value::as_str) {
-        Some("free-tier") => Some("Free".into()),
+fn window_kind(id: &str) -> Option<(&'static str, u64, u8)> {
+    match id {
+        "gemini-5h" => Some(("5-hour", 300, 0)),
+        "3p-5h" => Some(("Claude/GPT 5-hour", 300, 1)),
+        "3p-weekly" => Some(("Claude/GPT weekly", 10_080, 2)),
+        "gemini-argon-wtu-weekly" => Some(("Argon weekly", 10_080, 3)),
+        "gemini-carbon-wtu-weekly" => Some(("Carbon weekly", 10_080, 4)),
+        "gemini-weekly" => Some(("Weekly", 10_080, 5)),
         _ => None,
     }
 }
 
-pub async fn read_account(profile: &Path) -> Result<ProviderReading, ProviderError> {
-    let mut sign_in = credential(profile).ok_or_else(sign_in_error)?;
-    if sign_in.token.expired() {
-        refresh_sign_in(profile).await?;
-        sign_in = credential(profile).ok_or_else(sign_in_error)?;
-    }
-    if sign_in.token.expired() || sign_in.token.access_token.is_empty() {
-        return Err(sign_in_error());
-    }
-
-    let client = providers::http_client(LABEL)?;
-    let token = &sign_in.token.access_token;
-    let (plan, quota) = tokio::try_join!(
-        google_post(&client, token, "loadCodeAssist"),
-        google_post(&client, token, "retrieveUserQuotaSummary"),
-    )?;
-    let windows = quota_windows(&quota, Utc::now().timestamp());
-    if windows.is_empty() {
-        return Err(ProviderError::Message(
-            "Antigravity returned no usable quota".into(),
-        ));
-    }
-    Ok(ProviderReading {
-        snapshot: UsageSnapshot {
-            email: Some(sign_in.id_token_email),
-            plan_type: plan_name(&plan),
-            bucket_name: Some(LABEL.into()),
-            windows,
-            reset_available_count: 0,
-            reset_credits: Vec::new(),
-        },
-        notice: None,
-    })
+fn text(value: Option<&Value>, limit: usize) -> Option<String> {
+    let value = value?.as_str()?.trim();
+    (!value.is_empty() && value.chars().count() <= limit && !value.chars().any(char::is_control))
+        .then(|| value.to_owned())
 }
 
-fn quota_windows(quota: &Value, now: i64) -> Vec<RateWindow> {
-    let groups = quota
-        .get("groups")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten();
-    let grouped_buckets = groups.flat_map(|group| {
-        let name = group.get("displayName").and_then(Value::as_str);
-        group
-            .get("buckets")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .map(move |bucket| (name, bucket))
-    });
-    let flat_buckets = quota
-        .get("buckets")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .map(|bucket| (None, bucket));
-    let mut seen = HashSet::new();
-    let mut windows = Vec::new();
-    for (family, bucket) in grouped_buckets.chain(flat_buckets) {
-        if bucket.get("disabled").and_then(Value::as_bool) == Some(true) {
-            continue;
-        }
-        let Some(id) = bucket.get("bucketId").and_then(Value::as_str) else {
-            continue;
+impl SavedQuota {
+    fn parse(bytes: &[u8], now: i64) -> Result<(Self, bool), &'static str> {
+        let report: Value =
+            serde_json::from_slice(bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(bytes))
+                .map_err(|_| "Expected JSON from agy -p /usage --output-format json.")?;
+        let status_line = report.get("product").and_then(Value::as_str) == Some(ID)
+            && report.get("quota").is_some_and(Value::is_object);
+        let mut windows = Vec::new();
+        let mut add_window = |id: &str, bucket: &Value| {
+            let Some((_, duration, order)) = window_kind(id) else {
+                return;
+            };
+            if bucket.get("disabled").and_then(Value::as_bool) == Some(true) {
+                return;
+            }
+            let Some(remaining) = bucket
+                .get("remaining_fraction")
+                .and_then(Value::as_f64)
+                .filter(|value| (0.0..=1.0).contains(value))
+            else {
+                return;
+            };
+            if windows
+                .iter()
+                .any(|(_, window): &(u8, QuotaWindow)| window.id == id)
+            {
+                return;
+            }
+            let reset_at = bucket
+                .get("reset_time")
+                .and_then(Value::as_str)
+                .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+                .map(|time| time.timestamp())
+                .or_else(|| {
+                    let seconds = bucket.get("reset_in_seconds")?.as_i64()?;
+                    (seconds >= 0).then_some(())?;
+                    now.checked_add(seconds)
+                })
+                .filter(|time| {
+                    // Unused buckets may carry a rolling deadline one full window away.
+                    !(remaining == 1.0
+                        && bucket.get("description").is_none()
+                        && time.abs_diff(now.saturating_add(duration as i64 * 60)) <= 60)
+                });
+            windows.push((
+                order,
+                QuotaWindow {
+                    id: id.into(),
+                    remaining: remaining as f32,
+                    reset_at,
+                },
+            ));
         };
-        let Some(remaining) = bucket.get("remainingFraction").and_then(Value::as_f64) else {
-            continue;
-        };
-        if !seen.insert(id) {
-            continue;
-        }
-        let (duration_mins, period) = match bucket.get("window").and_then(Value::as_str) {
-            Some("5h") => (Some(300), "5-hour"),
-            Some("weekly") => (Some(10_080), "Weekly"),
-            _ => (
-                None,
-                bucket
-                    .get("displayName")
-                    .and_then(Value::as_str)
-                    .unwrap_or("Quota"),
-            ),
-        };
-        let (family, order) = match id {
-            "gemini-5h" => (Some("Gemini"), 0),
-            "gemini-weekly" => (Some("Gemini"), 2),
-            "3p-5h" | "3p-weekly" => (Some("Claude & GPT"), 1),
-            _ => (family, 1),
-        };
-        let label = family.map_or_else(|| period.into(), |name| format!("{name} · {period}"));
-        let resets_at = providers::timestamp(bucket.get("resetTime")).filter(|reset| {
-            // Google can return a rolling placeholder while a window is unused.
-            !(remaining == 1.0
-                && bucket.get("description").is_none()
-                && duration_mins
-                    .is_some_and(|duration| (now + duration as i64 * 60).abs_diff(*reset) <= 60))
-        });
-        windows.push((
-            order,
-            RateWindow {
-                label: Some(label),
-                used_percent: ((1.0 - remaining.clamp(0.0, 1.0)) * 100.0) as f32,
-                duration_mins,
-                resets_at,
-            },
-        ));
-    }
-    // The compact UI takes the first short and last equally long window.
-    windows.sort_by_key(|(order, _)| *order);
-    windows.into_iter().map(|(_, window)| window).collect()
-}
-
-fn managed_executable(profile: &Path) -> Option<PathBuf> {
-    // Profile layout: <t3 root>/userdata/providers/antigravity/<profile>.
-    let root = profile.ancestors().nth(4)?;
-    let os = match std::env::consts::OS {
-        "macos" => "darwin",
-        "windows" => "win32",
-        os => os,
-    };
-    let arch = match std::env::consts::ARCH {
-        "x86_64" => "x64",
-        "aarch64" => "arm64",
-        _ => return None,
-    };
-    let runtime = root
-        .join("tools")
-        .join(PROFILE_DIR)
-        .join(format!("{os}-{arch}"));
-    let active: Value =
-        serde_json::from_slice(&read_profile_file(&runtime.join("active.json"))?).ok()?;
-    let release = active.get("releaseId")?.as_str()?;
-    if release.len() != 64 || !release.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return None;
-    }
-    let executable = if cfg!(windows) {
-        "agy.exe"
-    } else {
-        "antigravity"
-    };
-    let executable = runtime.join("versions").join(release).join(executable);
-    executable.is_file().then_some(executable)
-}
-
-async fn refresh_sign_in(profile: &Path) -> Result<(), ProviderError> {
-    let executable = managed_executable(profile).ok_or_else(sign_in_error)?;
-    // Let Google's runtime renew its own credentials without starting a conversation.
-    let mut child = Command::new(executable)
-        .args(["acp", "--gemini-dir"])
-        .arg(profile)
-        .args(["--app-data-dir", PROFILE_DIR, "--disable-telemetry"])
-        .current_dir(profile)
-        .env("GEMINI_HOME", profile)
-        .env("AGY_ACP_FORCE_FILE_STORAGE", "1")
-        .env("AGY_CLI_DISABLE_AUTO_UPDATE", "1")
-        .env("SSH_CONNECTION", "127.0.0.1 0 127.0.0.1 0")
-        .env("BROWSER", "false")
-        .env_remove("GEMINI_API_KEY")
-        .env_remove("GOOGLE_API_KEY")
-        .env_remove("AGY_ADC_AUTH")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(|_| sign_in_error())?;
-    let mut stdin = child.stdin.take().ok_or_else(sign_in_error)?;
-    let stdout = child.stdout.take().ok_or_else(sign_in_error)?;
-    let mut lines = BufReader::new(stdout.take(256 * 1024)).lines();
-
-    tokio::time::timeout(Duration::from_secs(10), async {
-        let requests = [
-            ("initialize", json!({"protocolVersion": 1, "clientInfo": {"name": "agents-usage", "version": env!("CARGO_PKG_VERSION")}})),
-            ("authenticate", json!({"methodId": "oauth-personal"})),
-        ];
-        for (index, (method, params)) in requests.into_iter().enumerate() {
-            let id = index + 1;
-            let request = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
-            stdin.write_all(format!("{request}\n").as_bytes()).await.map_err(|_| sign_in_error())?;
-            loop {
-                let line = lines.next_line().await.map_err(|_| sign_in_error())?.ok_or_else(sign_in_error)?;
-                let response: Value = serde_json::from_str(&line).map_err(|_| sign_in_error())?;
-                if response.get("id").and_then(Value::as_u64) == Some(id as u64) {
-                    if response.get("result").is_none() || response.get("error").is_some() {
-                        return Err(sign_in_error());
-                    }
-                    break;
+        let data = if status_line {
+            if let Some(buckets) = report.get("quota").and_then(Value::as_object) {
+                for (id, bucket) in buckets {
+                    add_window(id, bucket);
                 }
             }
+            &report
+        } else {
+            if report.get("status").and_then(Value::as_str) != Some("SUCCESS")
+                || !matches!(
+                    report.pointer("/command/name").and_then(Value::as_str),
+                    Some("usage" | "quota")
+                )
+            {
+                return Err(
+                    "Antigravity did not return a successful quota report. Run agy and check your sign-in.",
+                );
+            }
+            for group in report
+                .pointer("/command/data/groups")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                for bucket in group
+                    .get("buckets")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                {
+                    if let Some(id) = bucket.get("id").and_then(Value::as_str) {
+                        add_window(id, bucket);
+                    }
+                }
+            }
+            report
+                .pointer("/command/data")
+                .ok_or("Antigravity did not include quota details.")?
+        };
+        if windows.is_empty() {
+            return Err("Antigravity did not include any supported quota windows.");
         }
-        drop(stdin);
-        child.wait().await.map_err(|_| sign_in_error())?;
-        Ok(())
-    }).await.map_err(|_| sign_in_error())?
+        windows.sort_by_key(|(order, _)| *order);
+        Ok((
+            Self {
+                windows: windows.into_iter().map(|(_, window)| window).collect(),
+                email: text(data.get("email"), 254),
+                plan: text(data.get("plan_tier"), 40),
+                saved_at: now,
+            },
+            status_line,
+        ))
+    }
+
+    pub fn snapshot(&self) -> UsageSnapshot {
+        UsageSnapshot {
+            email: self.email.clone(),
+            plan_type: self.plan.clone(),
+            bucket_name: Some("Antigravity".into()),
+            windows: self
+                .windows
+                .iter()
+                .filter_map(|window| {
+                    let (label, duration_mins, _) = window_kind(&window.id)?;
+                    Some(RateWindow {
+                        label: Some(label.into()),
+                        used_percent: (1.0 - window.remaining) * 100.0,
+                        duration_mins: Some(duration_mins),
+                        resets_at: window.reset_at,
+                    })
+                })
+                .collect(),
+            reset_available_count: 0,
+            reset_credits: Vec::new(),
+        }
+    }
+
+    pub fn saved_label(&self) -> String {
+        chrono::DateTime::from_timestamp(self.saved_at, 0)
+            .map(|time| {
+                format!(
+                    "Imported {}",
+                    time.with_timezone(&chrono::Local).format("%b %e at %H:%M")
+                )
+            })
+            .unwrap_or_else(|| "Imported quota report".into())
+    }
+}
+
+pub fn manual_home() -> PathBuf {
+    config::config_path().with_file_name("manual-antigravity")
+}
+
+fn report_path() -> PathBuf {
+    config::config_path().with_file_name("antigravity-usage.json")
+}
+
+pub fn read_report() -> Option<SavedQuota> {
+    let mut bytes = Vec::new();
+    fs::File::open(report_path())
+        .ok()?
+        .take(MAX_REPORT_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if bytes.len() as u64 > MAX_REPORT_BYTES {
+        return None;
+    }
+    serde_json::from_slice(&bytes).ok()
+}
+
+pub fn clear_report() -> io::Result<()> {
+    match fs::remove_file(report_path()) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        result => result,
+    }
+}
+
+pub fn import_report(input: impl Read) -> Result<(), String> {
+    let mut bytes = Vec::new();
+    input
+        .take(MAX_REPORT_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "Could not read the Antigravity report.".to_string())?;
+    if bytes.len() as u64 > MAX_REPORT_BYTES {
+        return Err("The Antigravity report is too large.".into());
+    }
+    let (mut report, status_line) =
+        SavedQuota::parse(&bytes, chrono::Utc::now().timestamp()).map_err(str::to_owned)?;
+    // The official status hook may repeat a payload frequently while typing.
+    // Avoid rewriting an unchanged snapshot or making it look freshly fetched.
+    if status_line && let Some(previous) = read_report() {
+        let received_at = report.saved_at;
+        report.saved_at = previous.saved_at;
+        if report == previous {
+            return Ok(());
+        }
+        report.saved_at = received_at;
+    }
+    let data =
+        serde_json::to_vec(&report).map_err(|_| "Could not encode the Antigravity report.")?;
+    config::atomic_write(&report_path(), &data)
+        .map_err(|error| format!("Could not save the Antigravity report: {error}"))
+}
+
+pub fn set_quota(config: &mut AppConfig, report: Option<SavedQuota>) {
+    if let Some(value) = &report {
+        let home = manual_home();
+        let has_preference = config
+            .accounts
+            .iter()
+            .any(|account| account.provider_id == ID && account.home == home);
+        if !has_preference
+            && let Some(previous) = config
+                .accounts
+                .iter_mut()
+                .find(|account| account.provider_id == ID)
+        {
+            if previous.display_name.as_deref()
+                == previous
+                    .identity_email
+                    .as_deref()
+                    .and_then(|email| email.split('@').next())
+            {
+                previous.display_name = None;
+            }
+            previous.home = home.clone();
+            // Older releases could leave this preference disabled after the live source was paused.
+            previous.enabled = true;
+            previous.expanded = true;
+        }
+        let pref = config::preference_for_provider_mut(config, ID, &home);
+        pref.identity_email.clone_from(&value.email);
+        if !has_preference {
+            pref.expanded = true;
+        }
+    }
+    config.antigravity_report = report;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
-    fn paid_plan_wins_over_google_base_tier() {
-        let response = json!({
-            "currentTier": {"id": "free-tier", "name": "Antigravity"},
-            "paidTier": {"id": "g1-pro-tier", "name": "Google AI Pro"},
-        });
-        assert_eq!(plan_name(&response).as_deref(), Some("Google AI Pro"));
+    fn native_usage_report_keeps_shared_windows_and_provider_reset() {
+        let payload = json!({"status":"SUCCESS", "command":{"name":"usage", "data":{"groups":[{"name":"Gemini Models","buckets":[
+            {"id":"gemini-weekly","remaining_fraction":0.75,"reset_time":"2026-11-23T03:00:00Z"},
+            {"id":"gemini-5h","remaining_fraction":0.0},
+            {"id":"3p-weekly","remaining_fraction":1.0,"disabled":true}
+        ]}]}}});
+        let (report, status_line) =
+            SavedQuota::parse(payload.to_string().as_bytes(), 1_799_000_000).unwrap();
+        assert!(!status_line);
+        let usage = report.snapshot();
+        assert_eq!(usage.email, None);
+        assert_eq!(usage.windows.len(), 2);
+        assert_eq!(usage.windows[0].used_percent, 100.0);
+        assert_eq!(usage.windows[1].used_percent, 25.0);
+        assert_eq!(usage.windows[1].resets_at, Some(1795402800));
+    }
+
+    #[test]
+    fn status_line_keeps_only_quota_identity_and_plan_and_rejects_empty_or_failed_reports() {
+        let input = br#"{"product":"antigravity","email":"user@example.com","plan_tier":"Google AI Pro","transcript_path":"private","quota":{"gemini-weekly":{"remaining_fraction":0.5,"reset_in_seconds":3601},"gemini-5h":{"remaining_fraction":1,"reset_in_seconds":18000}}}"#;
+        let (report, status_line) = SavedQuota::parse(input, 0).unwrap();
+        assert!(status_line);
         assert_eq!(
-            plan_name(&json!({"currentTier": {"id": "free-tier"}})).as_deref(),
-            Some("Free")
+            report.snapshot().plan_type.as_deref(),
+            Some("Google AI Pro")
         );
-        assert_eq!(plan_name(&json!({})), None);
-    }
-
-    #[test]
-    fn quota_keeps_the_gemini_windows_and_suppresses_rolling_idle_resets() {
-        const NOW: i64 = 1_800_000_000;
-        let response = json!({"groups": [
-            {"displayName": "Gemini Models", "buckets": [
-                {"bucketId": "gemini-weekly", "window": "weekly", "remainingFraction": 0.75, "resetTime": NOW + 604_800},
-                {"bucketId": "gemini-5h", "window": "5h", "remainingFraction": 1.0, "resetTime": NOW + 18_000}
-            ]},
-            {"displayName": "Claude and GPT models", "buckets": [
-                {"bucketId": "3p-weekly", "window": "weekly", "remainingFraction": 1.0, "resetTime": NOW + 604_800, "disabled": true},
-                {"bucketId": "3p-5h", "window": "5h", "remainingFraction": 0.5, "resetTime": NOW + 10_000}
-            ]}
-        ], "buckets": [
-            {"bucketId": "gemini-5h", "remainingFraction": 0.2},
-            {"bucketId": "unknown"}
-        ]});
-        let windows = quota_windows(&response, NOW);
-        assert_eq!(windows.len(), 3);
-        assert_eq!(windows[0].label.as_deref(), Some("Gemini · 5-hour"));
+        let windows = report.snapshot().windows;
+        assert_eq!(windows[0].label.as_deref(), Some("5-hour"));
         assert_eq!(windows[0].resets_at, None);
-        assert_eq!(windows[1].label.as_deref(), Some("Claude & GPT · 5-hour"));
-        assert_eq!(windows[1].resets_at, Some(NOW + 10_000));
-        assert_eq!(windows[2].label.as_deref(), Some("Gemini · Weekly"));
-        assert_eq!(windows[2].used_percent, 25.0);
-        assert_eq!(windows[2].resets_at, Some(NOW + 604_800));
-    }
-
-    #[test]
-    fn discovery_ignores_a_saved_personal_login_after_switching_to_api_key() {
-        let profile =
-            std::env::temp_dir().join(format!("agents-usage-antigravity-{}", uuid::Uuid::new_v4()));
-        let directory = profile.join(PROFILE_DIR);
-        fs::create_dir_all(&directory).unwrap();
-        fs::write(
-            directory.join(TOKEN_FILE),
-            json!({
-                "auth_method": "consumer",
-                "id_token_email": "example@example.com",
-                "token": {"access_token": "fixture", "expiry": "2026-11-20T17:50:37-03:00"},
-            })
-            .to_string(),
-        )
-        .unwrap();
-        let settings = directory.join("settings.json");
-        fs::write(&settings, r#"{"auth":{"type":"oauth-personal"}}"#).unwrap();
-        let signed_in = local_email(&profile);
-        fs::write(&settings, r#"{"auth":{"type":"gemini-api-key"}}"#).unwrap();
-        let switched = local_email(&profile);
-        fs::remove_dir_all(&profile).unwrap();
-        assert_eq!(signed_in.as_deref(), Some("example@example.com"));
-        assert_eq!(switched, None);
+        assert_eq!(windows[1].label.as_deref(), Some("Weekly"));
+        assert_eq!(windows[1].resets_at, Some(3601));
+        assert!(!serde_json::to_string(&report).unwrap().contains("private"));
+        for input in [
+            "{}",
+            r#"{"status":"ERROR"}"#,
+            r#"{"product":"antigravity","quota":{"gemini-weekly":{"remaining_fraction":1.1}}}"#,
+        ] {
+            assert!(SavedQuota::parse(input.as_bytes(), 0).is_err());
+        }
     }
 }

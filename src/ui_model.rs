@@ -109,7 +109,7 @@ pub fn account_view(
 
     AccountView {
         id: record.id.clone().into(),
-        provider_id: icon_provider(&record.provider_id).into(),
+        provider_id: record.provider_id.clone().into(),
         display_name: record.display_name.clone().into(),
         masked_display_name: mask_account_name(&record.display_name).into(),
         color_name: record.color_name.clone().into(),
@@ -171,14 +171,6 @@ pub fn account_view(
         show_separator,
         detail_height_px: target_detail_height,
         row_height_px: row_height,
-    }
-}
-
-pub(crate) fn icon_provider(provider_id: &str) -> &str {
-    if provider_id == crate::antigravity::ID {
-        crate::providers::GOOGLE
-    } else {
-        provider_id
     }
 }
 

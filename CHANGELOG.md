@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.3 — 2026-11-22
+
+- Replace direct Antigravity subscription requests with imports of Google’s official CLI quota output.
+- Keep Antigravity reset countdowns readable and use the provider artwork from T3 Code.
+
 ## 0.5.0 — 2026-11-20
 
 - Discover personal Google Antigravity sign-ins from T3 Code and show the Google AI plan, shared Gemini quota, and any additional quota windows Google reports.

@@ -4,6 +4,7 @@ use super::*;
 use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
 use slint::platform::{Platform, WindowAdapter};
 use std::rc::Rc;
+use slint::Model;
 
 struct HeadlessPlatform(Rc<MinimalSoftwareWindow>);
 
@@ -104,4 +105,43 @@ fn settings_grows_from_one_account_and_back_restores_dashboard() {
     show_settings(&ui, None, &native_xid);
     assert_eq!(ui.get_desired_height_px(), 520.0);
     snapshot(&ui, &window, "settings-disabled", 1.0);
+
+
+    let template = records.lock().unwrap()[0].clone();
+    *records.lock().unwrap() = [
+        ("antigravity", "Antigravity"),
+        ("openai", "Codex"),
+        ("anthropic", "Claude"),
+        ("cursor", "Cursor"),
+        ("xai", "Grok"),
+        ("opencode", "OpenCode"),
+        ("google", "Gemini"),
+    ].into_iter().enumerate().map(|(index, (provider, name))| {
+        let mut account = template.clone();
+        account.id = provider.into();
+        account.display_name = name.into();
+        account.provider_id = provider.into();
+        account.enabled = true;
+        account.expanded = index == 0;
+        let snapshot = account.snapshot.as_mut().unwrap();
+        snapshot.email = None;
+        snapshot.plan_type = if index == 0 { Some("Google AI Pro".into()) } else { None };
+        snapshot.windows[0].resets_at = Some(now + 6 * 86_400 + 23 * 3_600);
+        if index == 0 {
+            let mut third_party = snapshot.windows[0].clone();
+            third_party.label = Some("Claude/GPT weekly".into());
+            third_party.used_percent = 10.0;
+            snapshot.windows.push(third_party);
+        }
+        account
+    }).collect();
+    render_ui(&ui, &records, &config, &anchor, None);
+    show_dashboard(&ui, None, &native_xid);
+    let antigravity = ui.get_accounts().row_data(0).unwrap();
+    assert_eq!(antigravity.provider_id.as_str(), "antigravity");
+    assert!(antigravity.has_long_reset_time);
+    assert!(antigravity.long_reset_text.starts_with("6d 23h"));
+    for scale in [1.0, 1.25, 2.0] {
+        snapshot_at_width(&ui, &window, "dashboard-provider-icons", scale, 355.0);
+    }
 }

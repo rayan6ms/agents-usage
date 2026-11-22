@@ -16,6 +16,8 @@ install -m 0755 "$BINARY" "$APP/Contents/MacOS/agents-usage"
 sed "s/@VERSION@/$VERSION/g" "$ROOT/packaging/macos/Info.plist.in" > "$APP/Contents/Info.plist"
 install -m 0644 "$ROOT/packaging/linux/agents-usage.svg" "$APP/Contents/Resources/agents-usage.svg"
 install -m 0644 "$ROOT/LICENSE" "$APP/Contents/Resources/LICENSE"
+install -m 0644 "$ROOT/THIRD_PARTY_ASSETS.md" "$APP/Contents/Resources/"
+cp -R "$ROOT/third_party" "$APP/Contents/Resources/third_party"
 plutil -lint "$APP/Contents/Info.plist"
 codesign --force --sign - --timestamp=none "$APP"
 

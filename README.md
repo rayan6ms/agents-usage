@@ -28,7 +28,7 @@ Launch Agents Usage, then click its tray icon to open the usage panel. The app d
 | OpenCode Go | OpenCode's local Go key and official Go usage API | 5-hour, weekly, and monthly quota |
 | Anthropic Claude | Claude Code subscription sign-in | Session, weekly, and model-scoped limits returned for the account |
 | Google Gemini | Gemini CLI Google sign-in and Code Assist quota API | Remaining quota and reset time for every returned model bucket |
-| Google Antigravity | Personal Google account signed in to Antigravity in T3 Code | Google AI plan and the quota windows returned for the account |
+| Google Antigravity | Import Google’s structured `/usage` report | Saved quota windows and reset times |
 | Cursor | Cursor Agent CLI sign-in and authenticated usage summary | Included, Auto, and API usage; individual and team-plan fallbacks |
 | xAI Grok | Grok CLI sign-in and authenticated billing API | Included-credit usage and its weekly or monthly reset |
 

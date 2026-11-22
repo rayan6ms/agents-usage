@@ -86,7 +86,7 @@ assert 'for account[index] in root.accounts' in ui
 assert 'account-name-changed' in ui and 'account-color-changed' in ui
 assert 'account-custom-color-changed' in ui and 'HsvColorPicker' in ui
 assert 'blur-names-changed' in ui and 'color-reset-timers-changed' in ui
-assert 'root.provider-id == "openai": Path' in ui
+assert 'assets/providers/openai.svg' in ui and 'assets/providers/antigravity.png' in ui
 assert 'assets/providers/cursor.svg' in ui
 for provider in ['openai', 'opencode', 'anthropic', 'google', 'cursor', 'xai']:
     assert f'"{provider}"' in providers
@@ -106,10 +106,9 @@ assert 'vertical-scrollbar-policy: as-needed' in ui
 assert 'if root.enabled-account-count > 0: DashboardScrollView' in ui
 assert 'root.account.show-separator ? 1px : 0px' in ui
 assert 'assets/icons/triangle-alert.svg' in ui and 'if root.account.has-error: AccountWarning' in ui
-assert 'width: 124px' in ui and 'root.label + " • resets in"' in ui
 assert 'height: 6px' in ui and 'y: (parent.height - self.height) / 2' in ui
 limit_line = ui.split('component LimitLine inherits Rectangle {', 1)[1].split('component Chevron', 1)[0]
-assert 'if root.show-reset-text: Rectangle {' in limit_line and 'y: 1px;' in limit_line
+assert 'timer.preferred-width' in limit_line and 'visible: root.show-reset-text;' in limit_line
 assert 'y: (parent.height - self.height) / 2 + 1px;' in limit_line and 'width: 30px;' in limit_line
 plan_badge = ui.split('component PlanBadge inherits Rectangle {', 1)[1].split('component AccountWarning', 1)[0]
 assert 'x: root.text == "Plus" ? -1px : 0px;' in plan_badge

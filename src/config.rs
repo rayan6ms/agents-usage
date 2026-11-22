@@ -30,6 +30,8 @@ pub struct AppConfig {
     pub additional_codex_homes: Vec<PathBuf>,
     #[serde(default)]
     pub accounts: Vec<AccountPreference>,
+    #[serde(skip)]
+    pub antigravity_report: Option<crate::antigravity::SavedQuota>,
     #[serde(default)]
     pub mobile: MobileConfig,
 }
@@ -49,6 +51,7 @@ impl Default for AppConfig {
             codex_executable: None,
             additional_codex_homes: Vec::new(),
             accounts: Vec::new(),
+            antigravity_report: None,
             mobile: MobileConfig::default(),
         }
     }
@@ -346,7 +349,7 @@ pub fn clear_pending_reset() -> io::Result<()> {
     }
 }
 
-fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
+pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }

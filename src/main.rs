@@ -320,6 +320,7 @@ enum WorkerCommand {
     Refresh,
     RefreshIfStale,
     RefreshIfStaleMobile,
+    ReadAntigravityReport,
     PersistSettings,
     MobileConfigChanged,
     MobileDeviceListChanged,
@@ -917,6 +918,13 @@ fn render_ui(
     ui.set_always_show_reset_counter(cfg.always_show_reset_counter);
     ui.set_show_banked_resets(cfg.show_banked_resets);
     ui.set_show_plan_badges(cfg.show_plan_badges);
+    let quota = cfg.antigravity_report.as_ref();
+    ui.set_antigravity_has_snapshot(quota.is_some());
+    let saved_label = quota.map(antigravity::SavedQuota::saved_label).unwrap_or_default();
+    if ui.get_antigravity_saved_label().as_str() != saved_label {
+        ui.set_antigravity_form_message("".into());
+        ui.set_antigravity_saved_label(saved_label.into());
+    }
     ui.set_mobile_enabled(cfg.mobile.enabled);
     ui.set_mobile_allow_lan(cfg.mobile.allows_lan());
     if !cfg.mobile.enabled {
@@ -1085,6 +1093,7 @@ fn reconcile_live_accounts(records: &mut Vec<AccountRecord>, config: &mut AppCon
     let homes = if discover { discovery::candidate_codex_homes(config) } else { Vec::new() };
     let cache = accounts::reconcile(config, cache, homes).into_iter()
         .map(|c| (account_id(&c.provider_id, &c.home), c.snapshot)).collect::<HashMap<_, _>>();
+    records.retain(|record| (record.provider_id != antigravity::ID) || cache.contains_key(&record.id));
     for (index, pref) in config.accounts.iter().enumerate() {
         let id = account_id(&pref.provider_id, &pref.home);
         let snapshot = cache.get(&id).cloned();
@@ -1196,6 +1205,7 @@ fn placeholder_record(
     index: usize,
     cached_snapshot: Option<UsageSnapshot>,
 ) -> Option<AccountRecord> {
+    if pref.provider_id == antigravity::ID && cached_snapshot.is_none() { return None; }
     // Keep saved accounts visible even when their credential file disappears.
     // The next refresh can then explain the missing/invalid sign-in instead of
     // silently dropping the account (or mislabeling it as rate-limited).
@@ -1305,7 +1315,7 @@ async fn refresh_known_accounts(
         .map(|records| {
             records
                 .iter()
-                .filter(|record| record.enabled)
+                .filter(|record| record.enabled && record.provider_id != antigravity::ID)
                 .map(|record| {
                     (
                         record.id.clone(),
@@ -1408,7 +1418,6 @@ async fn discover_new_accounts(
                     Some(codex_path) => codex::read_openai_identity(codex_path, &candidate.home).await.ok().flatten(),
                     None => None,
                 },
-                Err(_) if candidate.provider_id == antigravity::ID => antigravity::local_email(&candidate.home),
                 Err(_) => None,
             };
             Some((order, candidate, result, identity_email))
@@ -1707,6 +1716,16 @@ fn spawn_worker(
                     None
                 };
 
+                let report_tx = tx.clone();
+                tokio::spawn(async move {
+                    // This checks only the local import file. The CLI owns all network access.
+                    let mut tick = tokio::time::interval(Duration::from_secs(3));
+                    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                    loop {
+                        tick.tick().await;
+                        if report_tx.send(WorkerCommand::ReadAntigravityReport).is_err() { break; }
+                    }
+                });
                 let tick_tx = tx.clone();
                 tokio::spawn(async move {
                     let mut interval = tokio::time::interval(Duration::from_secs(60));
@@ -1918,6 +1937,26 @@ fn spawn_worker(
                                 }
                             });
                         }
+                        WorkerCommand::ReadAntigravityReport => {
+                            let report = antigravity::read_report();
+                            let changed = if let (Ok(mut records), Ok(mut settings)) = (accounts.lock(), config.lock()) {
+                                if settings.antigravity_report == report {
+                                    false
+                                } else {
+                                    let accounts_before = settings.accounts.clone();
+                                    antigravity::set_quota(&mut settings, report);
+                                    reconcile_live_accounts(&mut records, &mut settings, false);
+                                    if settings.accounts != accounts_before && let Err(error) = config::save(&settings) {
+                                        eprintln!("settings: could not save imported Antigravity account: {error}");
+                                    }
+                                    true
+                                }
+                            } else { false };
+                            if changed {
+                                persist_usage_cache(&accounts);
+                                schedule_render(ui.clone(), accounts.clone(), config.clone(), last_anchor_shared.clone(), None);
+                            }
+                        }
                         WorkerCommand::PersistSettings => persist_config(&config),
                         WorkerCommand::MobileConfigChanged => {
                             persist_config(&config);
@@ -2045,6 +2084,18 @@ fn main() -> Result<(), slint::PlatformError> {
     use slint::winit_030::winit::platform::x11::{EventLoopBuilderExtX11 as _, WindowAttributesExtX11, WindowType};
 
     let arguments = std::env::args_os().skip(1).collect::<Vec<_>>();
+    if arguments.first().is_some_and(|arg| arg == "--import-antigravity-usage") {
+        let quiet = arguments.get(1).is_some_and(|arg| arg == "--quiet");
+        match antigravity::import_report(std::io::stdin().lock()) {
+            Ok(()) => { if !quiet { println!("Antigravity quota imported."); } }
+            Err(_) if quiet => {}
+            Err(error) => {
+                eprintln!("{error}");
+                std::process::exit(1);
+            }
+        }
+        return Ok(());
+    }
     if handle_mobile_command(&arguments) { return Ok(()); }
     let open_on_start = launch_mode(arguments) == LaunchMode::Open;
     #[cfg(target_os = "linux")]
@@ -2093,6 +2144,7 @@ fn main() -> Result<(), slint::PlatformError> {
     ui.window().on_close_requested(|| CloseRequestResponse::HideWindow);
 
     let mut loaded_config = config::load();
+    antigravity::set_quota(&mut loaded_config, antigravity::read_report());
     let migrated_display_preferences = config::migrate_display_preferences(&mut loaded_config);
     let migrated_mobile_access = mobile::migrate_legacy_access(&mut loaded_config);
     let migrated_persistent_sessions = mobile::make_device_sessions_persistent(&mut loaded_config);
@@ -2551,6 +2603,26 @@ fn main() -> Result<(), slint::PlatformError> {
             }
             if let Some(ui) = ui_weak.upgrade() { render_ui(&ui, &accounts, &config_arc, &last_anchor, None); }
             send(&tx, WorkerCommand::PersistSettings);
+        });
+    }
+    {
+        let ui_weak = ui.as_weak();
+        ui.on_antigravity_copy_command(move || {
+            let result = ClipboardContext::new().and_then(|mut clipboard| clipboard.set_contents(antigravity::IMPORT_COMMAND.into()));
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_antigravity_form_message(if result.is_ok() { "Command copied" } else { "Could not copy the command" }.into());
+            }
+        });
+    }
+    {
+        let tx = tx.clone();
+        let ui_weak = ui.as_weak();
+        ui.on_antigravity_clear_snapshot(move || {
+            let result = antigravity::clear_report();
+            if result.is_ok() { send(&tx, WorkerCommand::ReadAntigravityReport); }
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_antigravity_form_message(if result.is_ok() { "" } else { "Could not clear the report" }.into());
+            }
         });
     }
     {

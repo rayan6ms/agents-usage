@@ -144,8 +144,6 @@ pub fn candidates(config: &AppConfig) -> Vec<ProviderCandidate> {
             });
         }
 
-        candidates.extend(antigravity::candidates(&home));
-
         let cursor = home.join(".cursor");
         if locate_user_executable(&["cursor-agent"], &home).is_some()
             && (cursor_auth_path(&home).is_file() || cursor.is_dir())
@@ -198,7 +196,6 @@ pub fn is_marked(provider_id: &str, home: &Path) -> bool {
                 || home.join("gemini-credentials.json").is_file()
                 || home.join("google_accounts.json").is_file()
         }
-        antigravity::ID => antigravity::local_email(home).is_some(),
         CURSOR => {
             let user_home = home.parent().unwrap_or(home);
             cursor_auth_path(user_home).is_file() || home.is_dir()
@@ -225,7 +222,6 @@ pub async fn read_account(
         OPENCODE => read_opencode_go(&candidate.home).await,
         ANTHROPIC => read_claude(&candidate.home).await,
         GOOGLE => read_gemini(&candidate.home).await,
-        antigravity::ID => antigravity::read_account(&candidate.home).await,
         CURSOR => read_cursor(&candidate.home).await,
         XAI => read_grok(&candidate.home).await,
         _ => Err(ProviderError::Message(

@@ -35,6 +35,7 @@ const MANIFEST: &str = include_str!("../mobile/manifest.webmanifest");
 const SERVICE_WORKER: &str = include_str!("../mobile/sw.js");
 const ICON_SVG: &str = include_str!("../packaging/linux/agents-usage.svg");
 const WARNING_ICON_SVG: &str = include_str!("../assets/icons/triangle-alert.svg");
+const PROVIDER_ANTIGRAVITY: &[u8] = include_bytes!("../assets/providers/antigravity.png");
 const PROVIDER_OPENAI: &str = include_str!("../assets/providers/openai.svg");
 const PROVIDER_OPENCODE: &str = include_str!("../assets/providers/opencode.svg");
 const PROVIDER_ANTHROPIC: &str = include_str!("../assets/providers/anthropic.svg");
@@ -232,6 +233,9 @@ async fn warning_icon_svg() -> Response {
 }
 
 async fn provider_icon(AxumPath(provider): AxumPath<String>) -> Response {
+    if provider == crate::antigravity::ID {
+        return static_response(PROVIDER_ANTIGRAVITY, "image/png", "public, max-age=86400");
+    }
     let icon = match provider.as_str() {
         "openai" => PROVIDER_OPENAI,
         "opencode" => PROVIDER_OPENCODE,
@@ -514,7 +518,7 @@ fn mobile_account(key: usize, account: AccountRecord) -> MobileAccount {
         .collect();
     MobileAccount {
         key,
-        provider_id: crate::ui_model::icon_provider(&account.provider_id).into(),
+        provider_id: account.provider_id,
         masked_display_name: crate::ui_model::mask_account_name(&account.display_name),
         display_name: account.display_name,
         color: account.color_name,
@@ -962,7 +966,15 @@ mod tests {
             .unwrap();
         assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
 
-        for provider in ["openai", "opencode", "anthropic", "google", "cursor", "xai"] {
+        for (provider, content_type) in [
+            ("openai", "image/svg+xml"),
+            ("opencode", "image/svg+xml"),
+            ("anthropic", "image/svg+xml"),
+            ("google", "image/svg+xml"),
+            ("cursor", "image/svg+xml"),
+            ("xai", "image/svg+xml"),
+            ("antigravity", "image/png"),
+        ] {
             let icon = app
                 .clone()
                 .oneshot(
@@ -973,7 +985,7 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(icon.status(), StatusCode::OK);
-            assert_eq!(icon.headers().get("content-type").unwrap(), "image/svg+xml");
+            assert_eq!(icon.headers().get("content-type").unwrap(), content_type);
         }
 
         let warning_icon = app
