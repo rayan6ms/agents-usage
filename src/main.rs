@@ -819,8 +819,32 @@ fn activate_visible_popup(ui: &MainWindow, native_xid_shared: &Arc<Mutex<Option<
     });
 }
 
+const PROVIDER_ICON_LOGICAL_PX: f32 = 20.0;
+
+fn sync_provider_icons(ui: &MainWindow) {
+    let scale = ui.window().scale_factor();
+    sync_provider_icons_for_scale(ui, if scale.is_finite() && scale > 0.0 { scale } else { 1.0 });
+}
+
+fn sync_provider_icons_for_scale(ui: &MainWindow, scale: f32) {
+    let target_px = (PROVIDER_ICON_LOGICAL_PX * scale).round().clamp(16.0, 128.0) as u32;
+    let icons = ProviderIcons::get(ui);
+    if icons.get_rendered_px() == target_px as i32 {
+        return;
+    }
+    icons.set_openai(ui_model::resample_icon_square(&icons.get_raw_openai(), target_px));
+    icons.set_antigravity(ui_model::resample_icon_square(&icons.get_raw_antigravity(), target_px));
+    icons.set_anthropic(ui_model::resample_icon_square(&icons.get_raw_anthropic(), target_px));
+    icons.set_google(ui_model::resample_icon_square(&icons.get_raw_google(), target_px));
+    icons.set_xai(ui_model::resample_icon_square(&icons.get_raw_xai(), target_px));
+    icons.set_cursor(ui_model::resample_icon_square(&icons.get_raw_cursor(), target_px));
+    icons.set_opencode(ui_model::resample_icon_square(&icons.get_raw_opencode(), target_px));
+    icons.set_rendered_px(target_px as i32);
+}
+
 fn show_dashboard(ui: &MainWindow, anchor: Option<PanelAnchor>, native_xid_shared: &Arc<Mutex<Option<u32>>>) {
     let started = Instant::now();
+    sync_provider_icons(ui);
     ui.set_settings_visible(false);
     ui.set_desired_height_px(ui.get_dashboard_height_px());
     if let Some(anchor) = anchor {
@@ -900,6 +924,7 @@ fn render_ui(
 ) {
     let records = accounts.lock().map(|value| value.clone()).unwrap_or_default();
     let cfg = config.lock().map(|value| value.clone()).unwrap_or_default();
+    sync_provider_icons(ui);
     let (model, enabled_count) = ui_model::model(&records, cfg.show_banked_resets);
     let dashboard_height = ui_model::panel_height(&records, cfg.show_banked_resets);
     let height = if ui.get_settings_visible() {
@@ -1301,6 +1326,64 @@ fn apply_refresh_error(
     }
 }
 
+async fn refresh_antigravity_account(
+    accounts: &Arc<Mutex<Vec<AccountRecord>>>,
+    config: &Arc<Mutex<AppConfig>>,
+    ui: &slint::Weak<MainWindow>,
+    last_anchor: &Arc<Mutex<Option<PanelAnchor>>>,
+    allow_discover: bool,
+) {
+    let antigravity_id = account_id(antigravity::ID, &antigravity::manual_home());
+    let (should_refresh, previous_report) = match (accounts.lock(), config.lock()) {
+        (Ok(records), Ok(settings)) => {
+            let known = records.iter().find(|record| record.provider_id == antigravity::ID);
+            let run = match known {
+                Some(record) => record.enabled,
+                None => allow_discover && antigravity::has_live_source(),
+            };
+            (run, settings.antigravity_report.clone())
+        }
+        _ => (false, None),
+    };
+    if !should_refresh {
+        return;
+    }
+
+    match antigravity::refresh_live(previous_report).await {
+        Some(Ok(report)) => {
+            let mut changed = false;
+            if let (Ok(mut records), Ok(mut settings)) = (accounts.lock(), config.lock()) {
+                let accounts_before = settings.accounts.clone();
+                if settings.antigravity_report.as_ref() != Some(&report) {
+                    changed = true;
+                }
+                antigravity::set_quota(&mut settings, Some(report));
+                reconcile_live_accounts(&mut records, &mut settings, false);
+                if let Some(record) = records.iter_mut().find(|r| r.id == antigravity_id)
+                    && record.last_error.take().is_some()
+                {
+                    changed = true;
+                }
+                if settings.accounts != accounts_before
+                    && let Err(error) = config::save(&settings)
+                {
+                    eprintln!("settings: could not save Antigravity account: {error}");
+                }
+            }
+            if changed {
+                persist_usage_cache(accounts);
+                schedule_render(ui.clone(), accounts.clone(), config.clone(), last_anchor.clone(), None);
+            }
+        }
+        Some(Err(message)) => {
+            eprintln!("refresh: {antigravity_id}: {message}");
+            apply_refresh_error(&antigravity_id, message, accounts);
+            schedule_render(ui.clone(), accounts.clone(), config.clone(), last_anchor.clone(), None);
+        }
+        None => {}
+    }
+}
+
 async fn refresh_known_accounts(
     codex_path: Option<PathBuf>,
     accounts: Arc<Mutex<Vec<AccountRecord>>>,
@@ -1329,40 +1412,40 @@ async fn refresh_known_accounts(
         })
         .unwrap_or_default();
 
-    if targets.is_empty() {
-        return;
-    }
+    if !targets.is_empty() {
+        let mut jobs = JoinSet::new();
+        let operation_semaphore = Arc::new(Semaphore::new(operation_concurrency.max(1)));
+        for (id, candidate) in targets {
+            let codex_path = codex_path.clone();
+            let rpc_semaphore = rpc_semaphore.clone();
+            let operation_semaphore = operation_semaphore.clone();
+            jobs.spawn(async move {
+                let Ok(_operation_permit) = operation_semaphore.acquire_owned().await else { return None; };
+                let Ok(_permit) = rpc_semaphore.acquire_owned().await else { return None; };
+                let result = providers::read_account(&candidate, codex_path.as_deref()).await;
+                Some((id, candidate, result))
+            });
+        }
 
-    let mut jobs = JoinSet::new();
-    let operation_semaphore = Arc::new(Semaphore::new(operation_concurrency.max(1)));
-    for (id, candidate) in targets {
-        let codex_path = codex_path.clone();
-        let rpc_semaphore = rpc_semaphore.clone();
-        let operation_semaphore = operation_semaphore.clone();
-        jobs.spawn(async move {
-            let Ok(_operation_permit) = operation_semaphore.acquire_owned().await else { return None; };
-            let Ok(_permit) = rpc_semaphore.acquire_owned().await else { return None; };
-            let result = providers::read_account(&candidate, codex_path.as_deref()).await;
-            Some((id, candidate, result))
-        });
-    }
-
-    while let Some(result) = jobs.join_next().await {
-        match result {
-            Ok(Some((_id, candidate, Ok(reading)))) => {
-                apply_snapshot(candidate.provider_id, candidate.home, reading.snapshot, reading.notice, &accounts, &config);
-                schedule_render(ui.clone(), accounts.clone(), config.clone(), last_anchor.clone(), None);
+        while let Some(result) = jobs.join_next().await {
+            match result {
+                Ok(Some((_id, candidate, Ok(reading)))) => {
+                    apply_snapshot(candidate.provider_id, candidate.home, reading.snapshot, reading.notice, &accounts, &config);
+                    schedule_render(ui.clone(), accounts.clone(), config.clone(), last_anchor.clone(), None);
+                }
+                Ok(Some((id, _candidate, Err(error)))) => {
+                    eprintln!("refresh: {id}: {error}");
+                    let user_message = error.user_message();
+                    apply_refresh_error(&id, user_message, &accounts);
+                    schedule_render(ui.clone(), accounts.clone(), config.clone(), last_anchor.clone(), None);
+                }
+                Ok(None) => {}
+                Err(error) => eprintln!("refresh task failed: {error}"),
             }
-            Ok(Some((id, _candidate, Err(error)))) => {
-                eprintln!("refresh: {id}: {error}");
-                let user_message = error.user_message();
-                apply_refresh_error(&id, user_message, &accounts);
-                schedule_render(ui.clone(), accounts.clone(), config.clone(), last_anchor.clone(), None);
-            }
-            Ok(None) => {}
-            Err(error) => eprintln!("refresh task failed: {error}"),
         }
     }
+
+    refresh_antigravity_account(&accounts, &config, &ui, &last_anchor, false).await;
 }
 
 async fn discover_new_accounts(
@@ -1390,6 +1473,7 @@ async fn discover_new_accounts(
         .filter(|candidate| !known.contains(&(candidate.provider_id.clone(), canonical_id(&candidate.home))))
         .collect::<Vec<_>>();
 
+    refresh_antigravity_account(&accounts, &config, &ui, &last_anchor, true).await;
     if unknown.is_empty() {
         return;
     }
@@ -1938,7 +2022,7 @@ fn spawn_worker(
                             });
                         }
                         WorkerCommand::ReadAntigravityReport => {
-                            let report = antigravity::read_report();
+                            let report = antigravity::read_effective_report();
                             let changed = if let (Ok(mut records), Ok(mut settings)) = (accounts.lock(), config.lock()) {
                                 if settings.antigravity_report == report {
                                     false
@@ -2144,7 +2228,7 @@ fn main() -> Result<(), slint::PlatformError> {
     ui.window().on_close_requested(|| CloseRequestResponse::HideWindow);
 
     let mut loaded_config = config::load();
-    antigravity::set_quota(&mut loaded_config, antigravity::read_report());
+    antigravity::set_quota(&mut loaded_config, antigravity::read_effective_report());
     let migrated_display_preferences = config::migrate_display_preferences(&mut loaded_config);
     let migrated_mobile_access = mobile::migrate_legacy_access(&mut loaded_config);
     let migrated_persistent_sessions = mobile::make_device_sessions_persistent(&mut loaded_config);
@@ -2716,8 +2800,14 @@ fn main() -> Result<(), slint::PlatformError> {
     // Real popover behavior: Escape and an actual focus loss dismiss it.
     {
         let tx = tx.clone();
+        let ui_weak = ui.as_weak();
         ui.window().on_winit_window_event(move |_slint_window, event| {
             match event {
+                winit::event::WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                    if let Some(ui) = ui_weak.upgrade() {
+                        sync_provider_icons_for_scale(&ui, *scale_factor as f32);
+                    }
+                }
                 winit::event::WindowEvent::Focused(focused) => {
                     #[cfg(target_os = "linux")]
                     if !*focused { send(&tx, WorkerCommand::CheckPopupFocus); }

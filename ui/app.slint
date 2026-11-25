@@ -298,6 +298,24 @@ component DashboardScrollView inherits Rectangle {
     }
 }
 
+export global ProviderIcons {
+    in-out property <int> rendered-px: 0;
+    out property <image> raw-openai: @image-url("../assets/providers/openai.svg");
+    out property <image> raw-antigravity: @image-url("../assets/providers/antigravity.png");
+    out property <image> raw-anthropic: @image-url("../assets/providers/anthropic.svg");
+    out property <image> raw-google: @image-url("../assets/providers/gemini.svg");
+    out property <image> raw-xai: @image-url("../assets/providers/xai.svg");
+    out property <image> raw-cursor: @image-url("../assets/providers/cursor.svg");
+    out property <image> raw-opencode: @image-url("../assets/providers/opencode.svg");
+    in-out property <image> openai: self.raw-openai;
+    in-out property <image> antigravity: self.raw-antigravity;
+    in-out property <image> anthropic: self.raw-anthropic;
+    in-out property <image> google: self.raw-google;
+    in-out property <image> xai: self.raw-xai;
+    in-out property <image> cursor: self.raw-cursor;
+    in-out property <image> opencode: self.raw-opencode;
+}
+
 component ProviderMark inherits Rectangle {
     in property <string> provider-id: "openai";
     in property <color> accent;
@@ -312,18 +330,18 @@ component ProviderMark inherits Rectangle {
         width: 20px;
         height: 20px;
         source: root.provider-id == "openai"
-            ? @image-url("../assets/providers/openai.svg")
+            ? ProviderIcons.openai
             : root.provider-id == "antigravity"
-            ? @image-url("../assets/providers/antigravity.png")
+            ? ProviderIcons.antigravity
             : root.provider-id == "anthropic"
-            ? @image-url("../assets/providers/anthropic.svg")
+            ? ProviderIcons.anthropic
             : root.provider-id == "google"
-            ? @image-url("../assets/providers/gemini.svg")
+            ? ProviderIcons.google
             : root.provider-id == "xai"
-            ? @image-url("../assets/providers/xai.svg")
+            ? ProviderIcons.xai
             : root.provider-id == "cursor"
-            ? @image-url("../assets/providers/cursor.svg")
-            : @image-url("../assets/providers/opencode.svg");
+            ? ProviderIcons.cursor
+            : ProviderIcons.opencode;
         image-fit: contain;
     }
 
@@ -415,10 +433,11 @@ component LimitLine inherits Rectangle {
     HorizontalLayout {
         width: parent.width;
         height: parent.height;
-        spacing: 4px;
+        spacing: 7px;
         Rectangle {
-            // Reserve time before sizing the label so the bars stay aligned.
-            width: 152px;
+            // Fit tightly to the visible label and optional timer so short rows
+            // do not leave a gap before the bar, while capping long labels.
+            width: min(156px, label-text.preferred-width + (root.show-reset-text ? timer.preferred-width + 5px : 0px));
             height: parent.height;
             label-text := Text {
                 x: 0px;
@@ -1364,7 +1383,7 @@ component AntigravityQuotaSettings inherits VerticalLayout {
         color: Palette.foreground;
     }
     Text {
-        text: "Run the import command in your terminal. The quota bars update when Antigravity sends a report.";
+        text: "Refreshes automatically from the official Antigravity CLI (agy) or T3 Code cache. You can also import a report manually.";
         font-size: 10px;
         color: Palette.foreground.with-alpha(0.74);
         wrap: word-wrap;

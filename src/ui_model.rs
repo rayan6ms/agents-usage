@@ -1,7 +1,7 @@
 use crate::domain::{AccountRecord, RateWindow};
 use crate::{AccountView, LimitView, ResetCreditView};
 use chrono::{Datelike, Local, TimeZone};
-use slint::{Color, ModelRc, VecModel};
+use slint::{Color, Image, ModelRc, Rgba8Pixel, SharedPixelBuffer, VecModel};
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -442,6 +442,121 @@ pub const ACCOUNT_COLORS: [&str; 10] = [
     "red", "orange", "yellow", "green", "cyan", "blue", "purple", "pink", "gray", "black",
 ];
 
+/// Downsample an icon in linear-light premultiplied RGBA to an exact square
+/// physical pixel size so Slint's nearest-neighbor software texture blitter
+/// renders it 1:1 with smooth anti-aliased edges.
+pub fn resample_icon_square(source: &Image, target_px: u32) -> Image {
+    let target_px = target_px.max(1);
+    let Some(src) = source.to_rgba8_premultiplied() else {
+        return source.clone();
+    };
+    let src_w = src.width();
+    let src_h = src.height();
+    if src_w == 0 || src_h == 0 || (src_w == target_px && src_h == target_px) {
+        return source.clone();
+    }
+
+    let pixels = src.as_slice();
+    let mut linear = Vec::with_capacity(pixels.len());
+    for pixel in pixels {
+        if pixel.a == 0 {
+            linear.push([0.0_f32; 4]);
+        } else {
+            let a = pixel.a as f32 / 255.0;
+            let inv_a = 1.0 / (pixel.a as f32);
+            let r = srgb_to_linear((pixel.r as f32 * inv_a).clamp(0.0, 1.0)) * a;
+            let g = srgb_to_linear((pixel.g as f32 * inv_a).clamp(0.0, 1.0)) * a;
+            let b = srgb_to_linear((pixel.b as f32 * inv_a).clamp(0.0, 1.0)) * a;
+            linear.push([r, g, b, a]);
+        }
+    }
+
+    let dst_f = target_px as f32;
+    let src_wf = src_w as f32;
+    let src_hf = src_h as f32;
+    let scale = (dst_f / src_wf).min(dst_f / src_hf);
+    let off_x = (dst_f - src_wf * scale) * 0.5;
+    let off_y = (dst_f - src_hf * scale) * 0.5;
+    let inv_scale = 1.0 / scale;
+    let footprint_area = inv_scale * inv_scale;
+
+    let mut out = SharedPixelBuffer::<Rgba8Pixel>::new(target_px, target_px);
+    let out_slice = out.make_mut_slice();
+    let stride = src_w as usize;
+
+    for dy in 0..target_px {
+        let sy0 = ((dy as f32 - off_y) * inv_scale).max(0.0);
+        let sy1 = ((dy as f32 + 1.0 - off_y) * inv_scale).min(src_hf);
+        if sy1 <= sy0 {
+            continue;
+        }
+        let iy0 = (sy0.floor() as u32).min(src_h - 1);
+        let iy1 = ((sy1.ceil() as u32).saturating_sub(1)).min(src_h - 1);
+
+        for dx in 0..target_px {
+            let sx0 = ((dx as f32 - off_x) * inv_scale).max(0.0);
+            let sx1 = ((dx as f32 + 1.0 - off_x) * inv_scale).min(src_wf);
+            if sx1 <= sx0 {
+                continue;
+            }
+            let ix0 = (sx0.floor() as u32).min(src_w - 1);
+            let ix1 = ((sx1.ceil() as u32).saturating_sub(1)).min(src_w - 1);
+
+            let mut acc = [0.0_f32; 4];
+            for iy in iy0..=iy1 {
+                let oy = ((iy + 1) as f32).min(sy1) - (iy as f32).max(sy0);
+                let row = iy as usize * stride;
+                for ix in ix0..=ix1 {
+                    let ox = ((ix + 1) as f32).min(sx1) - (ix as f32).max(sx0);
+                    let w = ox * oy;
+                    let p = linear[row + ix as usize];
+                    acc[0] += p[0] * w;
+                    acc[1] += p[1] * w;
+                    acc[2] += p[2] * w;
+                    acc[3] += p[3] * w;
+                }
+            }
+
+            let out_a = (acc[3] / footprint_area).clamp(0.0, 1.0);
+            if out_a <= 0.0 {
+                continue;
+            }
+            let inv_a = 1.0 / acc[3];
+            let r_srgb = linear_to_srgb((acc[0] * inv_a).clamp(0.0, 1.0));
+            let g_srgb = linear_to_srgb((acc[1] * inv_a).clamp(0.0, 1.0));
+            let b_srgb = linear_to_srgb((acc[2] * inv_a).clamp(0.0, 1.0));
+            let a_u8 = (out_a * 255.0).round().clamp(0.0, 255.0) as u8;
+            let premul = |channel: f32| -> u8 {
+                ((channel * out_a * 255.0).round() as u32).min(a_u8 as u32) as u8
+            };
+            out_slice[(dy * target_px + dx) as usize] = Rgba8Pixel::new(
+                premul(r_srgb),
+                premul(g_srgb),
+                premul(b_srgb),
+                a_u8,
+            );
+        }
+    }
+
+    Image::from_rgba8_premultiplied(out)
+}
+
+fn srgb_to_linear(value: f32) -> f32 {
+    if value <= 0.04045 {
+        value / 12.92
+    } else {
+        ((value + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+fn linear_to_srgb(value: f32) -> f32 {
+    if value <= 0.003_130_8 {
+        value * 12.92
+    } else {
+        1.055 * value.powf(1.0 / 2.4) - 0.055
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{ACCOUNT_COLORS, account_view, color_from_name, format_countdown, format_expiry, is_account_color, mask_account_name, model, plan_display_name, primary_window_index, relative_luminance, reset_timer_color, visible_usage_color};
@@ -668,5 +783,42 @@ mod tests {
             resets_at: None,
         };
         assert_eq!(primary_window_index(&[&comfortable, &constrained]), Some(1));
+    }
+
+    #[test]
+    fn icon_resampler_produces_antialiased_square_output_preserving_aspect_ratio() {
+        use super::resample_icon_square;
+        use slint::{Image, Rgba8Pixel, SharedPixelBuffer};
+
+        // 40x80 white vertical bar (1:2 aspect ratio) centered into 20x20 -> 10x20 centered at x=5..15.
+        let mut src = SharedPixelBuffer::<Rgba8Pixel>::new(40, 80);
+        for pixel in src.make_mut_slice() {
+            *pixel = Rgba8Pixel::new(255, 255, 255, 255);
+        }
+        let resampled = resample_icon_square(&Image::from_rgba8_premultiplied(src), 20);
+        let out = resampled.to_rgba8_premultiplied().expect("premultiplied output");
+        assert_eq!((out.width(), out.height()), (20, 20));
+        let slice = out.as_slice();
+        // Left margin is transparent, center is opaque white.
+        assert_eq!(slice[0].a, 0);
+        assert_eq!(slice[10 * 20 + 10], Rgba8Pixel::new(255, 255, 255, 255));
+
+        // Checkerboard 4x4 downsampled to 2x2 should produce smooth 50% alpha instead of binary 0/255.
+        let mut checker = SharedPixelBuffer::<Rgba8Pixel>::new(4, 4);
+        let checker_slice = checker.make_mut_slice();
+        for y in 0..4 {
+            for x in 0..4 {
+                if (x + y) % 2 == 0 {
+                    checker_slice[y * 4 + x] = Rgba8Pixel::new(255, 255, 255, 255);
+                }
+            }
+        }
+        let smooth = resample_icon_square(&Image::from_rgba8_premultiplied(checker), 2)
+            .to_rgba8_premultiplied()
+            .expect("smooth output");
+        assert_eq!((smooth.width(), smooth.height()), (2, 2));
+        for pixel in smooth.as_slice() {
+            assert!(pixel.a > 100 && pixel.a < 160, "expected ~50% anti-aliased alpha, got {}", pixel.a);
+        }
     }
 }

@@ -20,6 +20,7 @@ fn snapshot(ui: &MainWindow, window: &MinimalSoftwareWindow, label: &str, scale:
 
 fn snapshot_at_width(ui: &MainWindow, window: &MinimalSoftwareWindow, label: &str, scale: f32, width: f32) {
     window.dispatch_event(slint::platform::WindowEvent::ScaleFactorChanged { scale_factor: scale });
+    sync_provider_icons(ui);
     // Simulate the native resize requested by show_settings/show_dashboard.
     window.set_size(slint::LogicalSize::new(width, ui.get_desired_height_px()));
     let pixels = ui.window().take_snapshot().expect("render headless UI");
@@ -128,10 +129,17 @@ fn settings_grows_from_one_account_and_back_restores_dashboard() {
         snapshot.plan_type = if index == 0 { Some("Google AI Pro".into()) } else { None };
         snapshot.windows[0].resets_at = Some(now + 6 * 86_400 + 23 * 3_600);
         if index == 0 {
+            snapshot.windows[1].resets_at = None;
             let mut third_party = snapshot.windows[0].clone();
             third_party.label = Some("Claude/GPT weekly".into());
             third_party.used_percent = 10.0;
+            third_party.resets_at = None;
             snapshot.windows.push(third_party);
+            let mut third_party_short = snapshot.windows[1].clone();
+            third_party_short.label = Some("Claude/GPT 5-hour".into());
+            third_party_short.used_percent = 0.0;
+            third_party_short.resets_at = None;
+            snapshot.windows.push(third_party_short);
         }
         account
     }).collect();
@@ -143,5 +151,11 @@ fn settings_grows_from_one_account_and_back_restores_dashboard() {
     assert!(antigravity.long_reset_text.starts_with("6d 23h"));
     for scale in [1.0, 1.25, 2.0] {
         snapshot_at_width(&ui, &window, "dashboard-provider-icons", scale, 355.0);
+        let expected_px = (PROVIDER_ICON_LOGICAL_PX * scale).round() as u32;
+        let icons = ProviderIcons::get(&ui);
+        assert_eq!(icons.get_rendered_px(), expected_px as i32);
+        assert_eq!(icons.get_openai().size(), slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(expected_px, expected_px).size());
+        assert_eq!(icons.get_antigravity().size(), slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(expected_px, expected_px).size());
+        assert_eq!(icons.get_google().size(), slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(expected_px, expected_px).size());
     }
 }

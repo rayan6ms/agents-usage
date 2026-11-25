@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.5 — 2026-11-25
+
+- Smooth software-rendered provider icons across DPI scales with linear-light premultiplied-alpha resampling and normalized 128×128 SVG artwork.
+- Remove excess gaps between limit labels/timers and usage bars by sizing label boxes tightly to their text.
+- Refresh Antigravity quota automatically via the official `agy` CLI and passively sync fresher readings from T3 Code's local provider status cache.
+
 ## 0.5.4 — 2026-11-25
 
 - Show account color dots only when multiple enabled accounts share a provider, on desktop and in the phone companion.

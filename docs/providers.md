@@ -10,7 +10,7 @@ Agents Usage discovers providers from the same local state their official comman
 | [OpenCode Go](https://dev.opencode.ai/docs/go/) | OpenCode with an active `opencode-go` connection | `opencode.ai/zen/go/v1/usage` | Rolling 5-hour, weekly, and monthly windows |
 | [Anthropic Claude](https://code.claude.com/docs/en/statusline) | Claude Code subscription sign-in | Anthropic OAuth usage endpoint used by Claude Code | Session, weekly, and any model-scoped windows returned for the account |
 | [Google Gemini](https://github.com/google-gemini/gemini-cli) | Gemini CLI Google OAuth sign-in | Gemini Code Assist `retrieveUserQuota` | Every model quota bucket and its reset time |
-| [Google Antigravity](https://antigravity.google/docs/cli/commands/usage) | Signed in to Google’s standalone Antigravity CLI | Local import of CLI output | Reported quota windows and reset times |
+| [Google Antigravity](https://antigravity.google/docs/cli/commands/usage) | Signed in to Google’s standalone Antigravity CLI (`agy`) or T3 Code | Official `agy -p /usage --output-format json` CLI, T3 Code’s local status cache, or stdin import | Reported quota windows and reset times |
 | [Cursor](https://docs.cursor.com/en/cli/reference/authentication) | Cursor Agent CLI on `PATH`, signed in | Cursor's authenticated usage-summary endpoint | Included, Auto, and API usage; individual and team-plan fallbacks |
 | [xAI Grok](https://x.ai/news/grok-build-cli) | Grok CLI sign-in | Grok CLI's authenticated billing endpoint | Included-credit usage and the returned weekly or monthly period |
 
@@ -32,17 +32,17 @@ The Gemini adapter refreshes an expired access token with the installed-applicat
 
 ## Google Antigravity quota
 
-Sign in once inside [Google’s standalone Antigravity CLI](https://antigravity.google/docs/getting-started/?tab=cli) with the account whose usage you want to see. From your terminal, run:
+Agents Usage keeps Antigravity quota up to date without reading Google sign-in tokens or calling Google quota endpoints directly:
+
+1. **Official Antigravity CLI (`agy`):** When Google’s standalone `agy` CLI is installed and signed in, opening the tray or pressing **Refresh** runs `agy -p /usage --output-format json` non-interactively (never launching a browser login flow) and updates the dashboard and phone companion with the reported windows and reset times.
+2. **T3 Code local cache:** When T3 Code is installed, Agents Usage also watches T3 Code’s non-secret provider status cache (`~/.t3/caches/*.json`) and adopts fresher `usageLimits` readings within a few seconds—even if standalone `agy` is not installed.
+3. **Manual or status-line import:** You can still pipe a report directly at any time:
 
 ```sh
 agy -p /usage --output-format json | agents-usage --import-antigravity-usage
 ```
 
-In Agents Usage, **Settings → Antigravity quota → Copy import command** copies this command. The dashboard and paired phone companion display the imported percentages and reset times within a few seconds. Run the command again whenever you want fresh quota. The bars show the last imported reading, and the settings show when it was imported. A failed import keeps the previous reading.
-
-If you use the standalone Antigravity CLI interactively, its [documented status line](https://antigravity.google/docs/cli/statusline/) can also send quota to the importer. Set its status-line command to `agents-usage --import-antigravity-usage --quiet` if you want that feed. This replaces the current status-line command, so preserve any existing customization you want to keep. Antigravity supplies the data, and Agents Usage stores only the relevant quota and any reported account and plan. T3 Code’s ACP sessions use a separate profile and don’t run the standalone CLI’s status line.
-
-Agents Usage receives the report on stdin. It does not start `agy`, open an Antigravity connection, or read Google sign-in files for this feature.
+In Agents Usage, **Settings → Antigravity quota → Copy import command** copies this command. If you use the standalone Antigravity CLI interactively, its [documented status line](https://antigravity.google/docs/cli/statusline/) can also send quota to `agents-usage --import-antigravity-usage --quiet`. Whichever source has the newest timestamp wins, while preserving known account identity and plan metadata. A failed refresh keeps the previous reading visible.
 
 ## Troubleshooting
 
