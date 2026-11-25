@@ -235,9 +235,10 @@ function accountHtml(account, accountCount) {
   const resetCount = isExpanded && showBankedResets && resetCountValue ? `<div class="detail-line"><span>Reset credits</span><span>${resetCountValue} available</span></div>` : "";
   const credits = isExpanded && showBankedResets ? account.reset_credits.map(credit => `<div class="credit"><div class="credit-title">${escapeHtml(credit.title)}</div><div class="credit-expiry">${escapeHtml(expiryText(credit))}</div></div>`).join("") : "";
   const error = longWindow && account.error ? `<div class="error">${escapeHtml(account.error)}</div>` : "";
+  const showAccent = latestState.accounts.some(other => other.key !== account.key && other.provider_id === account.provider_id);
   return `<article class="account" data-key="${account.key}" style="--account-color:${colorValue(account.color)}">
     <div class="account-head">
-      <span class="provider-wrap"><img class="provider-mark" src="${endpoint(`provider-icons/${account.provider_id}`)}" alt="">${accountCount > 1 ? '<span class="accent-dot"></span>' : ""}</span>
+      <span class="provider-wrap"><img class="provider-mark" src="${endpoint(`provider-icons/${account.provider_id}`)}" alt="">${showAccent ? '<span class="accent-dot" aria-hidden="true"></span>' : ""}</span>
       <button class="identity-button" data-action="name" type="button">${escapeHtml(shownName)}</button>
       ${planBadge}
       ${warningIcon}

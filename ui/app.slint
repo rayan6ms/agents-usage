@@ -28,7 +28,6 @@ export struct AccountView {
     masked-email: string,
     has-plan: bool,
     plan-name: string,
-    accent: color,
     show-accent: bool,
     enabled: bool,
     expanded: bool,
@@ -682,7 +681,7 @@ component AccountRow inherits Rectangle {
             spacing: 7px;
             ProviderMark {
                 provider-id: root.account.provider-id;
-                accent: root.account.accent;
+                accent: root.account.account-color;
                 show-accent: root.account.show-accent;
             }
             Rectangle {

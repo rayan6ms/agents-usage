@@ -2,6 +2,7 @@ use crate::domain::{AccountRecord, RateWindow};
 use crate::{AccountView, LimitView, ResetCreditView};
 use chrono::{Datelike, Local, TimeZone};
 use slint::{Color, ModelRc, VecModel};
+use std::collections::HashMap;
 use std::rc::Rc;
 
 // The 40 px header, 1 px divider, and 2 px outer frame.
@@ -31,15 +32,12 @@ pub fn account_view(
     let long = windows.last().copied();
     let now = chrono::Utc::now().timestamp();
 
-    let provider_color = Color::from_rgb_u8(255, 255, 255);
     let account_color = color_from_name(&record.color_name);
-    let accent = if enabled_count <= 1 { provider_color } else { account_color };
     let usage_color = if enabled_count <= 1 {
-        provider_color
+        Color::from_rgb_u8(255, 255, 255)
     } else {
         visible_usage_color(account_color)
     };
-    let show_accent = enabled_count > 1;
 
     // The account chevron is the single control for revealing the short
     // (5-hour) window. Keep the legacy preference field readable for config
@@ -120,8 +118,7 @@ pub fn account_view(
         masked_email: mask_email(record.email()).into(),
         has_plan: !plan_name.is_empty(),
         plan_name: plan_name.into(),
-        accent,
-        show_accent,
+        show_accent: false,
         enabled: record.enabled,
         expanded: record.expanded,
         name_revealed: record.name_revealed,
@@ -225,14 +222,21 @@ pub fn panel_height(records: &[AccountRecord], show_banked_resets: bool) -> f32 
 }
 
 pub fn model(records: &[AccountRecord], show_banked_resets: bool) -> (ModelRc<AccountView>, usize) {
-    let enabled_count = records.iter().filter(|record| record.enabled).count();
+    let mut enabled_provider_counts = HashMap::<&str, usize>::new();
+    for record in records.iter().filter(|record| record.enabled) {
+        *enabled_provider_counts.entry(record.provider_id.as_str()).or_default() += 1;
+    }
+    let enabled_count = enabled_provider_counts.values().sum();
     let last_enabled_index = records.iter().rposition(|record| record.enabled);
     let rows = records
         .iter()
         .enumerate()
         .map(|(index, record)| {
             let show_separator = record.enabled && Some(index) != last_enabled_index;
-            account_view(record, enabled_count, show_banked_resets, show_separator)
+            let mut row = account_view(record, enabled_count, show_banked_resets, show_separator);
+            row.show_accent = record.enabled && enabled_provider_counts
+                .get(record.provider_id.as_str()).is_some_and(|&count| count > 1);
+            row
         })
         .collect::<Vec<_>>();
     (Rc::new(VecModel::from(rows)).into(), enabled_count)
@@ -620,6 +624,33 @@ mod tests {
         assert!(rows.row_data(0).expect("first row").show_separator);
         assert!(!rows.row_data(1).expect("last enabled row").show_separator);
         assert!(!rows.row_data(2).expect("disabled row").show_separator);
+    }
+
+    #[test]
+    fn provider_accents_follow_enabled_counts_for_each_icon() {
+        let codex = AccountRecord {
+            id: "codex".into(), home: PathBuf::new(), provider_id: "openai".into(),
+            display_name: "Codex".into(), color_name: "cyan".into(),
+            enabled: true, pin_short: false, expanded: false,
+            name_revealed: false, email_revealed: false,
+            confirm_credit_id: String::new(), snapshot: None, last_error: None,
+        };
+        let second_codex = AccountRecord {
+            id: "second-codex".into(), enabled: false, ..codex.clone()
+        };
+        let claude = AccountRecord {
+            id: "claude".into(), provider_id: "anthropic".into(), ..codex.clone()
+        };
+        let mut records = [codex, second_codex, claude];
+
+        let (rows, _) = model(&records, true);
+        assert!(rows.iter().all(|row| !row.show_accent));
+
+        records[1].enabled = true;
+        let (rows, _) = model(&records, true);
+        assert!(rows.row_data(0).unwrap().show_accent);
+        assert!(rows.row_data(1).unwrap().show_accent);
+        assert!(!rows.row_data(2).unwrap().show_accent);
     }
 
     #[test]

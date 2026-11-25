@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.4 — 2026-11-25
+
+- Show account color dots only when multiple enabled accounts share a provider, on desktop and in the phone companion.
+
 ## 0.5.3 — 2026-11-22
 
 - Replace direct Antigravity subscription requests with imports of Google’s official CLI quota output.
