@@ -15,12 +15,23 @@ pub fn account_view(
     record: &AccountRecord,
     enabled_count: usize,
     show_banked_resets: bool,
+    show_antigravity_third_party_limits: bool,
     show_separator: bool,
 ) -> AccountView {
     let snapshot = record.snapshot.as_ref();
     let plan_name = plan_display_name(snapshot.and_then(|value| value.plan_type.as_deref()));
     let mut windows: Vec<&RateWindow> = snapshot
-        .map(|snapshot| snapshot.windows.iter().collect())
+        .map(|snapshot| {
+            snapshot
+                .windows
+                .iter()
+                .filter(|window| {
+                    show_antigravity_third_party_limits
+                        || record.provider_id != crate::antigravity::ID
+                        || !crate::antigravity::is_third_party_window(window)
+                })
+                .collect()
+        })
         .unwrap_or_default();
     windows.sort_by_key(|window| window.duration_mins.unwrap_or(u64::MAX));
     if let Some(index) = primary_window_index(&windows) {
@@ -208,7 +219,11 @@ pub fn settings_panel_height(dashboard_height: f32) -> f32 {
     dashboard_height.max(520.0)
 }
 
-pub fn panel_height(records: &[AccountRecord], show_banked_resets: bool) -> f32 {
+pub fn panel_height(
+    records: &[AccountRecord],
+    show_banked_resets: bool,
+    show_antigravity_third_party_limits: bool,
+) -> f32 {
     let enabled_count = records.iter().filter(|record| record.enabled).count();
     if enabled_count == 0 {
         return PANEL_HEADER_HEIGHT + EMPTY_CONTENT_HEIGHT;
@@ -216,12 +231,25 @@ pub fn panel_height(records: &[AccountRecord], show_banked_resets: bool) -> f32 
     let rows = records
         .iter()
         .filter(|record| record.enabled)
-        .map(|record| account_view(record, enabled_count, show_banked_resets, false).row_height_px)
+        .map(|record| {
+            account_view(
+                record,
+                enabled_count,
+                show_banked_resets,
+                show_antigravity_third_party_limits,
+                false,
+            )
+            .row_height_px
+        })
         .sum::<f32>();
     (PANEL_HEADER_HEIGHT + rows + PANEL_BOTTOM_PADDING).min(PANEL_MAX_HEIGHT)
 }
 
-pub fn model(records: &[AccountRecord], show_banked_resets: bool) -> (ModelRc<AccountView>, usize) {
+pub fn model(
+    records: &[AccountRecord],
+    show_banked_resets: bool,
+    show_antigravity_third_party_limits: bool,
+) -> (ModelRc<AccountView>, usize) {
     let mut enabled_provider_counts = HashMap::<&str, usize>::new();
     for record in records.iter().filter(|record| record.enabled) {
         *enabled_provider_counts.entry(record.provider_id.as_str()).or_default() += 1;
@@ -233,7 +261,13 @@ pub fn model(records: &[AccountRecord], show_banked_resets: bool) -> (ModelRc<Ac
         .enumerate()
         .map(|(index, record)| {
             let show_separator = record.enabled && Some(index) != last_enabled_index;
-            let mut row = account_view(record, enabled_count, show_banked_resets, show_separator);
+            let mut row = account_view(
+                record,
+                enabled_count,
+                show_banked_resets,
+                show_antigravity_third_party_limits,
+                show_separator,
+            );
             row.show_accent = record.enabled && enabled_provider_counts
                 .get(record.provider_id.as_str()).is_some_and(|&count| count > 1);
             row
@@ -678,14 +712,53 @@ mod tests {
             last_error: None,
         };
 
-        let shown = account_view(&record, 1, true, false);
-        let hidden = account_view(&record, 1, false, false);
+        let shown = account_view(&record, 1, true, true, false);
+        let hidden = account_view(&record, 1, false, true, false);
         assert!(shown.has_reset_credits);
         assert_eq!(shown.reset_credits.row_count(), 1);
         assert!(shown.has_hidden_details);
         assert!(!hidden.has_reset_credits);
         assert_eq!(hidden.reset_credits.row_count(), 0);
         assert!(!hidden.has_hidden_details);
+        assert!(shown.row_height_px > hidden.row_height_px);
+    }
+
+    #[test]
+    fn antigravity_third_party_limits_can_be_hidden_without_affecting_gemini_windows() {
+        let record = AccountRecord {
+            id: "antigravity:test".into(),
+            home: PathBuf::new(),
+            provider_id: crate::antigravity::ID.into(),
+            display_name: "Antigravity".into(),
+            color_name: "red".into(),
+            enabled: true,
+            pin_short: false,
+            expanded: true,
+            name_revealed: false,
+            email_revealed: false,
+            confirm_credit_id: String::new(),
+            snapshot: Some(UsageSnapshot {
+                email: Some("user@example.com".into()),
+                plan_type: Some("Google AI Pro".into()),
+                bucket_name: Some("Antigravity".into()),
+                windows: vec![
+                    RateWindow { label: Some("5-hour".into()), used_percent: 20.0, duration_mins: Some(300), resets_at: None },
+                    RateWindow { label: Some("Claude/GPT 5-hour".into()), used_percent: 0.0, duration_mins: Some(300), resets_at: None },
+                    RateWindow { label: Some("Claude/GPT weekly".into()), used_percent: 0.0, duration_mins: Some(10_080), resets_at: None },
+                    RateWindow { label: Some("Weekly".into()), used_percent: 10.0, duration_mins: Some(10_080), resets_at: None },
+                ],
+                reset_available_count: 0,
+                reset_credits: Vec::new(),
+            }),
+            last_error: None,
+        };
+
+        let shown = account_view(&record, 1, true, true, false);
+        let hidden = account_view(&record, 1, true, false, false);
+        assert_eq!(shown.detail_limits.row_count(), 2);
+        assert_eq!(hidden.detail_limits.row_count(), 0);
+        assert_eq!(hidden.long_label.as_str(), "Weekly");
+        assert_eq!(hidden.short_label.as_str(), "5-hour");
         assert!(shown.row_height_px > hidden.row_height_px);
     }
 
@@ -698,14 +771,14 @@ mod tests {
             name_revealed: false, email_revealed: false,
             confirm_credit_id: String::new(), snapshot: None, last_error: None,
         }];
-        let dashboard_height = super::panel_height(&records, true);
+        let dashboard_height = super::panel_height(&records, true, true);
         assert!(dashboard_height < 520.0);
         assert_eq!(super::settings_panel_height(dashboard_height), 520.0);
         // Going back still uses the compact dashboard calculation.
-        assert_eq!(super::panel_height(&records, true), dashboard_height);
+        assert_eq!(super::panel_height(&records, true, true), dashboard_height);
         records[0].enabled = false;
-        assert_eq!(super::settings_panel_height(super::panel_height(&records, true)), 520.0);
-        assert_eq!(super::settings_panel_height(super::panel_height(&[], true)), 520.0);
+        assert_eq!(super::settings_panel_height(super::panel_height(&records, true, true)), 520.0);
+        assert_eq!(super::settings_panel_height(super::panel_height(&[], true, true)), 520.0);
         assert_eq!(super::settings_panel_height(520.0), 520.0);
         assert_eq!(super::settings_panel_height(super::PANEL_MAX_HEIGHT), super::PANEL_MAX_HEIGHT);
     }
@@ -733,7 +806,7 @@ mod tests {
         disabled_tail.id = "disabled-tail".into();
         disabled_tail.enabled = false;
 
-        let (rows, enabled_count) = model(&[record, last_enabled, disabled_tail], true);
+        let (rows, enabled_count) = model(&[record, last_enabled, disabled_tail], true, true);
 
         assert_eq!(enabled_count, 2);
         assert!(rows.row_data(0).expect("first row").show_separator);
@@ -758,11 +831,11 @@ mod tests {
         };
         let mut records = [codex, second_codex, claude];
 
-        let (rows, _) = model(&records, true);
+        let (rows, _) = model(&records, true, true);
         assert!(rows.iter().all(|row| !row.show_accent));
 
         records[1].enabled = true;
-        let (rows, _) = model(&records, true);
+        let (rows, _) = model(&records, true, true);
         assert!(rows.row_data(0).unwrap().show_accent);
         assert!(rows.row_data(1).unwrap().show_accent);
         assert!(!rows.row_data(2).unwrap().show_accent);

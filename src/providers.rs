@@ -161,6 +161,8 @@ pub fn candidates(config: &AppConfig) -> Vec<ProviderCandidate> {
                 home: grok,
             });
         }
+
+        candidates.extend(antigravity::t3_candidates(&home));
     }
 
     for preference in &config.accounts {
@@ -201,6 +203,7 @@ pub fn is_marked(provider_id: &str, home: &Path) -> bool {
             cursor_auth_path(user_home).is_file() || home.is_dir()
         }
         XAI => home.join("auth.json").is_file(),
+        antigravity::ID => !antigravity::is_manual_home(home) && antigravity::is_t3_profile(home),
         _ => false,
     }
 }
@@ -208,6 +211,14 @@ pub fn is_marked(provider_id: &str, home: &Path) -> bool {
 pub async fn read_account(
     candidate: &ProviderCandidate,
     codex_path: Option<&Path>,
+) -> Result<ProviderReading, ProviderError> {
+    read_account_with_plan(candidate, codex_path, None).await
+}
+
+pub async fn read_account_with_plan(
+    candidate: &ProviderCandidate,
+    codex_path: Option<&Path>,
+    cached_plan: Option<String>,
 ) -> Result<ProviderReading, ProviderError> {
     match candidate.provider_id.as_str() {
         OPENAI => {
@@ -222,6 +233,7 @@ pub async fn read_account(
         OPENCODE => read_opencode_go(&candidate.home).await,
         ANTHROPIC => read_claude(&candidate.home).await,
         GOOGLE => read_gemini(&candidate.home).await,
+        antigravity::ID => antigravity::read_t3_account(&candidate.home, cached_plan).await,
         CURSOR => read_cursor(&candidate.home).await,
         XAI => read_grok(&candidate.home).await,
         _ => Err(ProviderError::Message(

@@ -390,11 +390,12 @@ async fn api_state(State(state): State<MobileServerState>, headers: HeaderMap) -
         .lock()
         .map(|value| value.clone())
         .unwrap_or_default();
+    let show_antigravity_third_party_limits = config.show_antigravity_third_party_limits;
     let accounts = accounts
         .into_iter()
         .enumerate()
         .filter(|(_, account)| account.enabled)
-        .map(|(key, account)| mobile_account(key, account))
+        .map(|(key, account)| mobile_account(key, account, show_antigravity_third_party_limits))
         .collect();
     let snapshot = MobileSnapshot {
         server_time: chrono::Utc::now().timestamp(),
@@ -484,8 +485,12 @@ fn forwarded_over_https(headers: &HeaderMap) -> bool {
         .is_some_and(|value| value.eq_ignore_ascii_case("https"))
 }
 
-fn mobile_account(key: usize, account: AccountRecord) -> MobileAccount {
-    let snapshot = account
+fn mobile_account(
+    key: usize,
+    account: AccountRecord,
+    show_antigravity_third_party_limits: bool,
+) -> MobileAccount {
+    let mut snapshot = account
         .snapshot
         .unwrap_or_else(|| crate::domain::UsageSnapshot {
             email: None,
@@ -495,6 +500,11 @@ fn mobile_account(key: usize, account: AccountRecord) -> MobileAccount {
             reset_available_count: 0,
             reset_credits: Vec::new(),
         });
+    if !show_antigravity_third_party_limits && account.provider_id == crate::antigravity::ID {
+        snapshot
+            .windows
+            .retain(|window| !crate::antigravity::is_third_party_window(window));
+    }
     let email = snapshot.email.clone().unwrap_or_default();
     let plan_name = crate::ui_model::plan_display_name(snapshot.plan_type.as_deref());
     let reset_credits = snapshot
@@ -798,31 +808,71 @@ mod tests {
 
     #[test]
     fn phone_accounts_include_the_authoritative_display_plan() {
-        let account = mobile_account(0, AccountRecord {
-            id: "openai:test".into(),
+        let account = mobile_account(
+            0,
+            AccountRecord {
+                id: "openai:test".into(),
+                home: PathBuf::new(),
+                provider_id: "openai".into(),
+                display_name: "Test".into(),
+                color_name: "cyan".into(),
+                enabled: true,
+                pin_short: false,
+                expanded: false,
+                name_revealed: false,
+                email_revealed: false,
+                confirm_credit_id: String::new(),
+                snapshot: Some(UsageSnapshot {
+                    email: Some("test@example.com".into()),
+                    plan_type: Some("free".into()),
+                    bucket_name: None,
+                    windows: Vec::new(),
+                    reset_available_count: 0,
+                    reset_credits: Vec::new(),
+                }),
+                last_error: None,
+            },
+            true,
+        );
+
+        assert_eq!(account.plan_name.as_deref(), Some("Free"));
+        assert!(serde_json::to_string(&account).unwrap().contains("\"plan_name\":\"Free\""));
+    }
+
+    #[test]
+    fn phone_accounts_filter_antigravity_third_party_limits_when_disabled() {
+        let record = AccountRecord {
+            id: "antigravity:test".into(),
             home: PathBuf::new(),
-            provider_id: "openai".into(),
-            display_name: "Test".into(),
-            color_name: "cyan".into(),
+            provider_id: crate::antigravity::ID.into(),
+            display_name: "Antigravity".into(),
+            color_name: "red".into(),
             enabled: true,
             pin_short: false,
-            expanded: false,
+            expanded: true,
             name_revealed: false,
             email_revealed: false,
             confirm_credit_id: String::new(),
             snapshot: Some(UsageSnapshot {
                 email: Some("test@example.com".into()),
-                plan_type: Some("free".into()),
-                bucket_name: None,
-                windows: Vec::new(),
+                plan_type: Some("Google AI Pro".into()),
+                bucket_name: Some("Antigravity".into()),
+                windows: vec![
+                    crate::domain::RateWindow { label: Some("5-hour".into()), used_percent: 10.0, duration_mins: Some(300), resets_at: None },
+                    crate::domain::RateWindow { label: Some("Claude/GPT 5-hour".into()), used_percent: 0.0, duration_mins: Some(300), resets_at: None },
+                    crate::domain::RateWindow { label: Some("Claude/GPT weekly".into()), used_percent: 0.0, duration_mins: Some(10_080), resets_at: None },
+                    crate::domain::RateWindow { label: Some("Weekly".into()), used_percent: 25.0, duration_mins: Some(10_080), resets_at: None },
+                ],
                 reset_available_count: 0,
                 reset_credits: Vec::new(),
             }),
             last_error: None,
-        });
+        };
 
-        assert_eq!(account.plan_name.as_deref(), Some("Free"));
-        assert!(serde_json::to_string(&account).unwrap().contains("\"plan_name\":\"Free\""));
+        assert_eq!(mobile_account(0, record.clone(), true).windows.len(), 4);
+        let filtered = mobile_account(0, record, false);
+        assert_eq!(filtered.windows.len(), 2);
+        assert!(filtered.windows.iter().all(|w| !crate::antigravity::is_third_party_window(w)));
     }
 
     #[test]

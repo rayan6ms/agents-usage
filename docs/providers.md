@@ -32,11 +32,12 @@ The Gemini adapter refreshes an expired access token with the installed-applicat
 
 ## Google Antigravity quota
 
-Agents Usage keeps Antigravity quota up to date without reading Google sign-in tokens or calling Google quota endpoints directly:
+Agents Usage keeps Antigravity quota up to date without reading Google OAuth tokens or calling Google quota endpoints directly:
 
-1. **Official Antigravity CLI (`agy`):** When Google’s standalone `agy` CLI is installed and signed in, opening the tray or pressing **Refresh** runs `agy -p /usage --output-format json` non-interactively (never launching a browser login flow) and updates the dashboard and phone companion with the reported windows and reset times.
-2. **T3 Code local cache:** When T3 Code is installed, Agents Usage also watches T3 Code’s non-secret provider status cache (`~/.t3/caches/*.json`) and adopts fresher `usageLimits` readings within a few seconds—even if standalone `agy` is not installed.
-3. **Manual or status-line import:** You can still pipe a report directly at any time:
+1. **T3 Code Antigravity accounts:** Agents Usage automatically discovers every personal Google Antigravity sign-in configured in T3 Code (`~/.t3/userdata/providers/antigravity/*`), tracks each account separately, and refreshes each profile through the official Antigravity CLI in an isolated temporary environment.
+2. **Official standalone Antigravity CLI (`agy`):** When Google’s standalone `agy` CLI is installed and signed in (and no T3 Code profiles cover it), opening the tray or pressing **Refresh** runs `agy -p /usage --output-format json` non-interactively (never launching a browser login flow) and updates the dashboard and phone companion with the reported windows and reset times.
+3. **T3 Code local cache:** When T3 Code’s non-secret provider status cache (`~/.t3/caches/*.json`) holds fresher `usageLimits`, Agents Usage can also adopt those readings.
+4. **Manual or status-line import:** You can still pipe a report directly at any time:
 
 ```sh
 agy -p /usage --output-format json | agents-usage --import-antigravity-usage

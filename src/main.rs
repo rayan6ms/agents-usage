@@ -925,8 +925,16 @@ fn render_ui(
     let records = accounts.lock().map(|value| value.clone()).unwrap_or_default();
     let cfg = config.lock().map(|value| value.clone()).unwrap_or_default();
     sync_provider_icons(ui);
-    let (model, enabled_count) = ui_model::model(&records, cfg.show_banked_resets);
-    let dashboard_height = ui_model::panel_height(&records, cfg.show_banked_resets);
+    let (model, enabled_count) = ui_model::model(
+        &records,
+        cfg.show_banked_resets,
+        cfg.show_antigravity_third_party_limits,
+    );
+    let dashboard_height = ui_model::panel_height(
+        &records,
+        cfg.show_banked_resets,
+        cfg.show_antigravity_third_party_limits,
+    );
     let height = if ui.get_settings_visible() {
         ui.get_settings_height_px()
     } else {
@@ -943,6 +951,8 @@ fn render_ui(
     ui.set_always_show_reset_counter(cfg.always_show_reset_counter);
     ui.set_show_banked_resets(cfg.show_banked_resets);
     ui.set_show_plan_badges(cfg.show_plan_badges);
+    ui.set_show_antigravity_third_party_limits(cfg.show_antigravity_third_party_limits);
+    ui.set_has_antigravity_account(records.iter().any(|record| record.provider_id == antigravity::ID));
     let quota = cfg.antigravity_report.as_ref();
     ui.set_antigravity_has_snapshot(quota.is_some());
     let saved_label = quota.map(antigravity::SavedQuota::saved_label).unwrap_or_default();
@@ -1106,7 +1116,13 @@ fn reconcile_cached_accounts(
     let previous = config.clone();
     let previous_cache = serde_json::to_value(&cache).ok();
     let homes = config.accounts.iter().filter(|p| p.provider_id == providers::OPENAI).map(|p| p.home.clone()).collect();
-    let cache = accounts::reconcile(config, cache, homes);
+    let ag_homes = config
+        .accounts
+        .iter()
+        .filter(|p| p.provider_id == antigravity::ID && !antigravity::is_manual_home(&p.home))
+        .map(|p| p.home.clone())
+        .collect();
+    let cache = accounts::reconcile(config, cache, homes, ag_homes);
     let changed = *config != previous || serde_json::to_value(&cache).ok() != previous_cache;
     (cache, changed)
 }
@@ -1116,9 +1132,13 @@ fn reconcile_live_accounts(records: &mut Vec<AccountRecord>, config: &mut AppCon
         provider_id: r.provider_id.clone(), home: r.home.clone(), snapshot,
     })).collect();
     let homes = if discover { discovery::candidate_codex_homes(config) } else { Vec::new() };
-    let cache = accounts::reconcile(config, cache, homes).into_iter()
+    let ag_homes = if discover { antigravity::t3_profile_homes() } else { Vec::new() };
+    let cache = accounts::reconcile(config, cache, homes, ag_homes).into_iter()
         .map(|c| (account_id(&c.provider_id, &c.home), c.snapshot)).collect::<HashMap<_, _>>();
-    records.retain(|record| (record.provider_id != antigravity::ID) || cache.contains_key(&record.id));
+    records.retain(|record| {
+        !(record.provider_id == antigravity::ID && antigravity::is_manual_home(&record.home))
+            || cache.contains_key(&record.id)
+    });
     for (index, pref) in config.accounts.iter().enumerate() {
         let id = account_id(&pref.provider_id, &pref.home);
         let snapshot = cache.get(&id).cloned();
@@ -1230,7 +1250,22 @@ fn placeholder_record(
     index: usize,
     cached_snapshot: Option<UsageSnapshot>,
 ) -> Option<AccountRecord> {
-    if pref.provider_id == antigravity::ID && cached_snapshot.is_none() { return None; }
+    if pref.provider_id == antigravity::ID
+        && antigravity::is_manual_home(&pref.home)
+        && cached_snapshot.is_none()
+    {
+        return None;
+    }
+    let fallback_name = if pref.provider_id == antigravity::ID {
+        pref.identity_email
+            .as_deref()
+            .and_then(|email| email.split('@').next())
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| source_account_name(&pref.provider_id, &pref.home))
+    } else {
+        source_account_name(&pref.provider_id, &pref.home)
+    };
     // Keep saved accounts visible even when their credential file disappears.
     // The next refresh can then explain the missing/invalid sign-in instead of
     // silently dropping the account (or mislabeling it as rate-limited).
@@ -1238,7 +1273,7 @@ fn placeholder_record(
         id: account_id(&pref.provider_id, &pref.home),
         home: pref.home.clone(),
         provider_id: pref.provider_id.clone(),
-        display_name: pref.display_name.clone().unwrap_or_else(|| source_account_name(&pref.provider_id, &pref.home)),
+        display_name: pref.display_name.clone().unwrap_or(fallback_name),
         color_name: normalized_account_color(
             pref.color.as_deref(),
             ui_model::ACCOUNT_COLORS[index % ui_model::ACCOUNT_COLORS.len()],
@@ -1278,7 +1313,7 @@ fn persist_usage_cache(accounts: &Arc<Mutex<Vec<AccountRecord>>>) {
 fn apply_snapshot(
     provider_id: String,
     home: PathBuf,
-    snapshot: crate::domain::UsageSnapshot,
+    mut snapshot: crate::domain::UsageSnapshot,
     notice: Option<String>,
     accounts: &Arc<Mutex<Vec<AccountRecord>>>,
     config: &Arc<Mutex<AppConfig>>,
@@ -1290,6 +1325,14 @@ fn apply_snapshot(
     // homes after a response, so a stale response cannot resurrect an old email.
     if let (Ok(mut records), Ok(mut cfg)) = (accounts.lock(), config.lock()) {
         let previous = cfg.clone();
+        if snapshot.plan_type.is_none()
+            && let Some(existing) = records.iter().find(|record| record.id == id)
+            && let Some(existing_snapshot) = existing.snapshot.as_ref()
+            && normalized_account_email(existing_snapshot.email.as_deref())
+                == normalized_account_email(snapshot.email.as_deref())
+        {
+            snapshot.plan_type.clone_from(&existing_snapshot.plan_type);
+        }
         let mut new_record = record_from_snapshot(&provider_id, home, snapshot, notice, &mut cfg, color_index);
         if let Some(index) = records.iter().position(|record| record.id == id) {
             let existing = records.remove(index);
@@ -1336,10 +1379,13 @@ async fn refresh_antigravity_account(
     let antigravity_id = account_id(antigravity::ID, &antigravity::manual_home());
     let (should_refresh, previous_report) = match (accounts.lock(), config.lock()) {
         (Ok(records), Ok(settings)) => {
-            let known = records.iter().find(|record| record.provider_id == antigravity::ID);
+            let known = records.iter().find(|record| record.id == antigravity_id);
+            let has_t3 = records.iter().any(|record| {
+                record.provider_id == antigravity::ID && !antigravity::is_manual_home(&record.home)
+            }) || antigravity::has_t3_profiles();
             let run = match known {
                 Some(record) => record.enabled,
-                None => allow_discover && antigravity::has_live_source(),
+                None => allow_discover && !has_t3 && antigravity::has_live_source(),
             };
             (run, settings.antigravity_report.clone())
         }
@@ -1398,7 +1444,11 @@ async fn refresh_known_accounts(
         .map(|records| {
             records
                 .iter()
-                .filter(|record| record.enabled && record.provider_id != antigravity::ID)
+                .filter(|record| {
+                    record.enabled
+                        && !(record.provider_id == antigravity::ID
+                            && antigravity::is_manual_home(&record.home))
+                })
                 .map(|record| {
                     (
                         record.id.clone(),
@@ -1406,6 +1456,7 @@ async fn refresh_known_accounts(
                             provider_id: record.provider_id.clone(),
                             home: record.home.clone(),
                         },
+                        record.snapshot.as_ref().and_then(|s| s.plan_type.clone()),
                     )
                 })
                 .collect::<Vec<_>>()
@@ -1415,14 +1466,14 @@ async fn refresh_known_accounts(
     if !targets.is_empty() {
         let mut jobs = JoinSet::new();
         let operation_semaphore = Arc::new(Semaphore::new(operation_concurrency.max(1)));
-        for (id, candidate) in targets {
+        for (id, candidate, cached_plan) in targets {
             let codex_path = codex_path.clone();
             let rpc_semaphore = rpc_semaphore.clone();
             let operation_semaphore = operation_semaphore.clone();
             jobs.spawn(async move {
                 let Ok(_operation_permit) = operation_semaphore.acquire_owned().await else { return None; };
                 let Ok(_permit) = rpc_semaphore.acquire_owned().await else { return None; };
-                let result = providers::read_account(&candidate, codex_path.as_deref()).await;
+                let result = providers::read_account_with_plan(&candidate, codex_path.as_deref(), cached_plan).await;
                 Some((id, candidate, result))
             });
         }
@@ -1502,6 +1553,7 @@ async fn discover_new_accounts(
                     Some(codex_path) => codex::read_openai_identity(codex_path, &candidate.home).await.ok().flatten(),
                     None => None,
                 },
+                Err(_) if candidate.provider_id == antigravity::ID => antigravity::local_email(&candidate.home),
                 Err(_) => None,
             };
             Some((order, candidate, result, identity_email))
@@ -2022,8 +2074,10 @@ fn spawn_worker(
                             });
                         }
                         WorkerCommand::ReadAntigravityReport => {
-                            let report = antigravity::read_effective_report();
+                            let raw_report = antigravity::read_effective_report();
                             let changed = if let (Ok(mut records), Ok(mut settings)) = (accounts.lock(), config.lock()) {
+                                let report = raw_report
+                                    .filter(|value| !antigravity::report_covered_by_t3(&settings, value));
                                 if settings.antigravity_report == report {
                                     false
                                 } else {
@@ -2228,7 +2282,7 @@ fn main() -> Result<(), slint::PlatformError> {
     ui.window().on_close_requested(|| CloseRequestResponse::HideWindow);
 
     let mut loaded_config = config::load();
-    antigravity::set_quota(&mut loaded_config, antigravity::read_effective_report());
+    loaded_config.antigravity_report = antigravity::read_effective_report();
     let migrated_display_preferences = config::migrate_display_preferences(&mut loaded_config);
     let migrated_mobile_access = mobile::migrate_legacy_access(&mut loaded_config);
     let migrated_persistent_sessions = mobile::make_device_sessions_persistent(&mut loaded_config);
@@ -2238,9 +2292,12 @@ fn main() -> Result<(), slint::PlatformError> {
         }
     }
     let discovery_homes = discovery::candidate_codex_homes(&loaded_config);
+    let antigravity_homes = antigravity::t3_profile_homes();
     let loaded_cache = config::load_usage_cache();
     let before_identity_reconcile = loaded_config.clone();
-    let loaded_cache = accounts::reconcile(&mut loaded_config, loaded_cache, discovery_homes);
+    let loaded_cache = accounts::reconcile(&mut loaded_config, loaded_cache, discovery_homes, antigravity_homes);
+    let pending_manual_report = loaded_config.antigravity_report.clone();
+    antigravity::set_quota(&mut loaded_config, pending_manual_report);
     if loaded_config != before_identity_reconcile {
         if let Err(error) = config::save(&loaded_config) {
             eprintln!("settings: could not persist account identity reconciliation: {error}");
@@ -2611,6 +2668,20 @@ fn main() -> Result<(), slint::PlatformError> {
         let config_arc = config.clone();
         let last_anchor = last_anchor_shared.clone();
         let tx = tx.clone();
+        ui.on_show_antigravity_third_party_limits_changed(move |value| {
+            if let Ok(mut cfg) = config_arc.lock() {
+                cfg.show_antigravity_third_party_limits = value;
+            }
+            if let Some(ui) = ui_weak.upgrade() { render_ui(&ui, &accounts, &config_arc, &last_anchor, None); }
+            send(&tx, WorkerCommand::PersistSettings);
+        });
+    }
+    {
+        let ui_weak = ui.as_weak();
+        let accounts = accounts.clone();
+        let config_arc = config.clone();
+        let last_anchor = last_anchor_shared.clone();
+        let tx = tx.clone();
         ui.on_blur_names_changed(move |value| {
             if let Ok(mut cfg) = config_arc.lock() { cfg.blur_names = value; }
             if let Some(ui) = ui_weak.upgrade() { render_ui(&ui, &accounts, &config_arc, &last_anchor, None); }
@@ -2852,6 +2923,7 @@ mod tests {
         source_account_name, tailscale_serve_matches,
     };
     use super::MobileEndpoints;
+    use crate::antigravity;
     use crate::config::{AccountPreference, AppConfig};
     use crate::domain::{CachedUsage, UsageSnapshot};
     use crate::providers;
@@ -3078,7 +3150,7 @@ mod tests {
             ..AppConfig::default()
         };
         let homes = config.accounts.iter().filter(|pref| pref.provider_id == providers::OPENAI).map(|pref| pref.home.clone()).collect();
-        crate::accounts::reconcile(&mut config, Vec::new(), homes);
+        crate::accounts::reconcile(&mut config, Vec::new(), homes, Vec::new());
         // Existing names may be intentional custom labels (including codexN),
         // so reconciliation must not overwrite them based on the directory.
         assert_eq!(config.accounts[0].display_name.as_deref(), Some("codex2"));
@@ -3163,6 +3235,96 @@ mod tests {
 
         let record = placeholder_record(&preference, 0, Some(snapshot)).unwrap();
         assert_eq!(record.email(), "cached@example.com");
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn reconcile_migrates_manual_antigravity_and_discovers_second_t3_profile_without_codex_collision() {
+        let root = std::env::temp_dir().join(format!("agents-usage-ag-reconcile-{}", uuid::Uuid::new_v4()));
+        let codex_home = root.join(".codex2");
+        let prof_first = root.join("prof-first");
+        let prof_second = root.join("prof-second");
+        fs::create_dir_all(&codex_home).unwrap();
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(r#"{"email":"second@example.com","auth_time":200}"#);
+        fs::write(
+            codex_home.join("auth.json"),
+            serde_json::json!({"tokens": {"id_token": format!("e30.{payload}.sig")}}).to_string(),
+        )
+        .unwrap();
+        for (profile, email) in [(&prof_first, "first@example.com"), (&prof_second, "second@example.com")] {
+            let acp = profile.join("antigravity-acp");
+            fs::create_dir_all(&acp).unwrap();
+            fs::write(acp.join("settings.json"), r#"{"auth":{"type":"oauth-personal"}}"#).unwrap();
+            fs::write(
+                acp.join("antigravity-oauth-token"),
+                serde_json::json!({"auth_method": "consumer", "id_token_email": email}).to_string(),
+            )
+            .unwrap();
+        }
+
+        let manual = antigravity::manual_home();
+        let mut config = AppConfig {
+            accounts: vec![
+                AccountPreference {
+                    provider_id: providers::OPENAI.into(),
+                    home: codex_home.clone(),
+                    identity_email: Some("second@example.com".into()),
+                    enabled: true,
+                    ..AccountPreference::default()
+                },
+                AccountPreference {
+                    provider_id: antigravity::ID.into(),
+                    home: manual.clone(),
+                    identity_email: Some("first@example.com".into()),
+                    color: Some("red".into()),
+                    enabled: true,
+                    expanded: true,
+                    ..AccountPreference::default()
+                },
+            ],
+            ..AppConfig::default()
+        };
+        let initial_cache = vec![CachedUsage {
+            provider_id: antigravity::ID.into(),
+            home: manual,
+            snapshot: UsageSnapshot {
+                email: Some("first@example.com".into()),
+                plan_type: Some("Google AI Pro".into()),
+                bucket_name: Some("Antigravity".into()),
+                windows: Vec::new(),
+                reset_available_count: 0,
+                reset_credits: Vec::new(),
+            },
+        }];
+
+        let cache = crate::accounts::reconcile(
+            &mut config,
+            initial_cache,
+            vec![codex_home.clone()],
+            vec![prof_first.clone(), prof_second.clone()],
+        );
+
+        assert_eq!(config.accounts.len(), 3);
+        // Codex account sharing second@example.com stays enabled and unaffected.
+        assert_eq!(config.accounts[0].provider_id, providers::OPENAI);
+        assert!(config.accounts[0].enabled);
+        assert!(config.accounts[0].duplicate_of.is_none());
+        // Manual antigravity entry migrated in place to prof_first keeping its color and expansion.
+        assert_eq!(config.accounts[1].provider_id, antigravity::ID);
+        assert_eq!(config.accounts[1].home, prof_first);
+        assert_eq!(config.accounts[1].color.as_deref(), Some("red"));
+        assert!(config.accounts[1].expanded);
+        assert!(config.accounts[1].enabled);
+        // Newly signed-in second T3 Antigravity profile discovered and enabled.
+        assert_eq!(config.accounts[2].provider_id, antigravity::ID);
+        assert_eq!(config.accounts[2].home, prof_second);
+        assert_eq!(config.accounts[2].identity_email.as_deref(), Some("second@example.com"));
+        assert!(config.accounts[2].enabled);
+        // Cached plan migrated from manual-antigravity to prof_first.
+        let first_cached = cache.iter().find(|c| c.home == prof_first).unwrap();
+        assert_eq!(first_cached.snapshot.plan_type.as_deref(), Some("Google AI Pro"));
 
         fs::remove_dir_all(root).unwrap();
     }

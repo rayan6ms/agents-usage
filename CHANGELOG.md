@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.6 — 2026-11-26
+
+- Discover and refresh every personal Google Antigravity account signed into T3 Code independently via the official CLI in an isolated temporary environment, migrating matching legacy manual entries without duplicates.
+- Add a conditional **Show Antigravity Claude/GPT limits** toggle in Settings (shown only when an Antigravity account is connected) to hide third-party Claude/GPT quota bars on desktop and in the phone companion.
+
 ## 0.5.5 — 2026-11-25
 
 - Smooth software-rendered provider icons across DPI scales with linear-light premultiplied-alpha resampling and normalized 128×128 SVG artwork.

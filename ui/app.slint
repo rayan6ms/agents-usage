@@ -1560,6 +1560,8 @@ export component MainWindow inherits Window {
     in-out property <bool> always-show-reset-counter: false;
     in-out property <bool> show-banked-resets: true;
     in-out property <bool> show-plan-badges: true;
+    in-out property <bool> show-antigravity-third-party-limits: true;
+    in property <bool> has-antigravity-account: false;
     in-out property <bool> motion-enabled: true;
     in-out property <bool> refreshing: false;
     in-out property <bool> reset-busy: false;
@@ -1601,6 +1603,7 @@ export component MainWindow inherits Window {
     callback always-show-reset-counter-changed(bool);
     callback show-banked-resets-changed(bool);
     callback show-plan-badges-changed(bool);
+    callback show-antigravity-third-party-limits-changed(bool);
     callback account-enabled-changed(string, bool);
     callback account-name-changed(string, string);
     callback account-color-changed(string, string);
@@ -1820,6 +1823,12 @@ export component MainWindow inherits Window {
                             subtitle: "Display plan badges beside account names on the dashboard";
                             checked: root.show-plan-badges;
                             changed(value) => { root.show-plan-badges-changed(value); }
+                        }
+                        if root.has-antigravity-account: SettingRow {
+                            title: "Show Antigravity Claude/GPT limits";
+                            subtitle: "Display third-party Claude/GPT quota bars on Antigravity accounts";
+                            checked: root.show-antigravity-third-party-limits;
+                            changed(value) => { root.show-antigravity-third-party-limits-changed(value); }
                         }
                         UsageBarColorSettings {
                             mode: root.usage-bar-color-mode;

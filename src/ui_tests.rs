@@ -70,6 +70,7 @@ fn settings_grows_from_one_account_and_back_restores_dashboard() {
     let anchor = Arc::new(Mutex::new(None));
     let native_xid = Arc::new(Mutex::new(None));
     render_ui(&ui, &records, &config, &anchor, None);
+    assert!(!ui.get_has_antigravity_account());
     let compact_height = ui.get_dashboard_height_px();
     assert!(compact_height < 520.0);
     show_dashboard(&ui, None, &native_xid);
@@ -144,11 +145,18 @@ fn settings_grows_from_one_account_and_back_restores_dashboard() {
         account
     }).collect();
     render_ui(&ui, &records, &config, &anchor, None);
+    assert!(ui.get_has_antigravity_account());
     show_dashboard(&ui, None, &native_xid);
     let antigravity = ui.get_accounts().row_data(0).unwrap();
     assert_eq!(antigravity.provider_id.as_str(), "antigravity");
     assert!(antigravity.has_long_reset_time);
     assert!(antigravity.long_reset_text.starts_with("6d 23h"));
+    assert_eq!(antigravity.detail_limits.row_count(), 2);
+    config.lock().unwrap().show_antigravity_third_party_limits = false;
+    render_ui(&ui, &records, &config, &anchor, None);
+    assert_eq!(ui.get_accounts().row_data(0).unwrap().detail_limits.row_count(), 0);
+    config.lock().unwrap().show_antigravity_third_party_limits = true;
+    render_ui(&ui, &records, &config, &anchor, None);
     for scale in [1.0, 1.25, 2.0] {
         snapshot_at_width(&ui, &window, "dashboard-provider-icons", scale, 355.0);
         let expected_px = (PROVIDER_ICON_LOGICAL_PX * scale).round() as u32;

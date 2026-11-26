@@ -24,6 +24,8 @@ pub struct AppConfig {
     pub show_banked_resets: bool,
     #[serde(default = "default_true")]
     pub show_plan_badges: bool,
+    #[serde(default = "default_true")]
+    pub show_antigravity_third_party_limits: bool,
     #[serde(default)]
     pub codex_executable: Option<PathBuf>,
     #[serde(default)]
@@ -48,6 +50,7 @@ impl Default for AppConfig {
             always_show_reset_counter: false,
             show_banked_resets: true,
             show_plan_badges: true,
+            show_antigravity_third_party_limits: true,
             codex_executable: None,
             additional_codex_homes: Vec::new(),
             accounts: Vec::new(),
@@ -481,6 +484,7 @@ pin_short = false
         assert!(!config.always_show_reset_counter);
         assert!(config.show_banked_resets);
         assert!(config.show_plan_badges);
+        assert!(config.show_antigravity_third_party_limits);
         assert_eq!(config.usage_bar_color_mode, super::UsageBarColorMode::Account);
         assert_eq!(config.usage_bar_custom_color, "#27bfce");
     }
@@ -536,6 +540,7 @@ port = 3765
             usage_bar_color_mode: super::UsageBarColorMode::Custom,
             usage_bar_custom_color: "#123abc".into(),
             show_banked_resets: false,
+            show_antigravity_third_party_limits: false,
             ..AppConfig::default()
         };
         let encoded = toml::to_string(&config).unwrap();
@@ -543,6 +548,7 @@ port = 3765
         assert_eq!(restored.usage_bar_color_mode, super::UsageBarColorMode::Custom);
         assert_eq!(restored.usage_bar_custom_color, "#123abc");
         assert!(!restored.show_banked_resets);
+        assert!(!restored.show_antigravity_third_party_limits);
         assert_eq!(super::UsageBarColorMode::parse("remaining"), Some(super::UsageBarColorMode::Remaining));
         assert_eq!(super::UsageBarColorMode::parse("invalid"), None);
     }
