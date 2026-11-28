@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.7 — 2026-11-28
+
+- Restore the **Show reset clock time** toggle to replace `• resets in` with a compact countdown and local reset clock (e.g. `2d23h (8:20am)` or `2d23h (08:20)`) on desktop and in the phone companion.
+- Add **Reset clock format** (`12-hour` / `24-hour`) buttons in Settings when reset clock time is enabled.
+
 ## 0.5.6 — 2026-11-26
 
 - Discover and refresh every personal Google Antigravity account signed into T3 Code independently via the official CLI in an isolated temporary environment, migrating matching legacy manual entries without duplicates.

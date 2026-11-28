@@ -102,6 +102,25 @@ fn settings_grows_from_one_account_and_back_restores_dashboard() {
     for scale in [1.0, 1.25, 1.5, 1.75, 2.0] {
         snapshot_at_width(&ui, &window, "dashboard-colored", scale, 355.0);
     }
+    config.lock().unwrap().show_reset_clock_time = true;
+    config.lock().unwrap().reset_clock_24_hour = false;
+    render_ui(&ui, &records, &config, &anchor, None);
+    let clock_row = ui.get_accounts().row_data(0).unwrap();
+    assert!(clock_row.long_reset_text.contains('(') && (clock_row.long_reset_text.ends_with("am)") || clock_row.long_reset_text.ends_with("pm)")));
+    assert!(clock_row.short_reset_text.contains('(') && (clock_row.short_reset_text.ends_with("am)") || clock_row.short_reset_text.ends_with("pm)")));
+    for scale in [1.0, 2.0] {
+        snapshot_at_width(&ui, &window, "dashboard-clock-12h", scale, 355.0);
+    }
+    show_settings(&ui, None, &native_xid);
+    snapshot(&ui, &window, "settings-clock-12h", 1.0);
+    config.lock().unwrap().reset_clock_24_hour = true;
+    render_ui(&ui, &records, &config, &anchor, None);
+    let clock_24_row = ui.get_accounts().row_data(0).unwrap();
+    assert!(clock_24_row.long_reset_text.contains('(') && !clock_24_row.long_reset_text.ends_with("am)") && !clock_24_row.long_reset_text.ends_with("pm)"));
+    show_dashboard(&ui, None, &native_xid);
+    snapshot_at_width(&ui, &window, "dashboard-clock-24h", 1.0, 355.0);
+    config.lock().unwrap().show_reset_clock_time = false;
+    render_ui(&ui, &records, &config, &anchor, None);
     records.lock().unwrap()[0].enabled = false;
     render_ui(&ui, &records, &config, &anchor, None);
     show_settings(&ui, None, &native_xid);

@@ -1,6 +1,7 @@
+use crate::config::AppConfig;
 use crate::domain::{AccountRecord, RateWindow};
 use crate::{AccountView, LimitView, ResetCreditView};
-use chrono::{Datelike, Local, TimeZone};
+use chrono::{Datelike, Local, TimeZone, Timelike};
 use slint::{Color, Image, ModelRc, Rgba8Pixel, SharedPixelBuffer, VecModel};
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -14,10 +15,11 @@ pub const PANEL_MAX_HEIGHT: f32 = 680.0;
 pub fn account_view(
     record: &AccountRecord,
     enabled_count: usize,
-    show_banked_resets: bool,
-    show_antigravity_third_party_limits: bool,
+    config: &AppConfig,
     show_separator: bool,
 ) -> AccountView {
+    let show_banked_resets = config.show_banked_resets;
+    let show_antigravity_third_party_limits = config.show_antigravity_third_party_limits;
     let snapshot = record.snapshot.as_ref();
     let plan_name = plan_display_name(snapshot.and_then(|value| value.plan_type.as_deref()));
     let mut windows: Vec<&RateWindow> = snapshot
@@ -144,7 +146,7 @@ pub fn account_view(
         has_long_reset_time: has_long_reset,
         long_reset_text: long
             .and_then(|window| window.resets_at)
-            .map(|value| format_countdown(value, now))
+            .map(|value| format_reset_text(value, now, config))
             .unwrap_or_default()
             .into(),
         long_reset_color: long.map(|window| reset_timer_color(window, now)).unwrap_or_default(),
@@ -155,7 +157,7 @@ pub fn account_view(
         has_short_reset_time: has_short_reset,
         short_reset_text: short
             .and_then(|window| window.resets_at)
-            .map(|value| format_countdown(value, now))
+            .map(|value| format_reset_text(value, now, config))
             .unwrap_or_default()
             .into(),
         short_reset_color: short.map(|window| reset_timer_color(window, now)).unwrap_or_default(),
@@ -167,7 +169,7 @@ pub fn account_view(
                     remaining: remaining_fraction(window),
                     percent_text: percent_text(window).into(),
                     has_reset_time: window.resets_at.is_some(),
-                    reset_text: window.resets_at.map(|value| format_countdown(value, now)).unwrap_or_default().into(),
+                    reset_text: window.resets_at.map(|value| format_reset_text(value, now, config)).unwrap_or_default().into(),
                     reset_color: reset_timer_color(window, now),
                 })
                 .collect::<Vec<_>>(),
@@ -221,8 +223,7 @@ pub fn settings_panel_height(dashboard_height: f32) -> f32 {
 
 pub fn panel_height(
     records: &[AccountRecord],
-    show_banked_resets: bool,
-    show_antigravity_third_party_limits: bool,
+    config: &AppConfig,
 ) -> f32 {
     let enabled_count = records.iter().filter(|record| record.enabled).count();
     if enabled_count == 0 {
@@ -235,8 +236,7 @@ pub fn panel_height(
             account_view(
                 record,
                 enabled_count,
-                show_banked_resets,
-                show_antigravity_third_party_limits,
+                config,
                 false,
             )
             .row_height_px
@@ -247,8 +247,7 @@ pub fn panel_height(
 
 pub fn model(
     records: &[AccountRecord],
-    show_banked_resets: bool,
-    show_antigravity_third_party_limits: bool,
+    config: &AppConfig,
 ) -> (ModelRc<AccountView>, usize) {
     let mut enabled_provider_counts = HashMap::<&str, usize>::new();
     for record in records.iter().filter(|record| record.enabled) {
@@ -264,8 +263,7 @@ pub fn model(
             let mut row = account_view(
                 record,
                 enabled_count,
-                show_banked_resets,
-                show_antigravity_third_party_limits,
+                config,
                 show_separator,
             );
             row.show_accent = record.enabled && enabled_provider_counts
@@ -341,10 +339,10 @@ fn window_label(window: &RateWindow, fallback: Option<&str>, long: bool) -> Stri
 }
 
 fn format_countdown(timestamp: i64, now: i64) -> String {
-    let seconds = (timestamp - now).max(0);
+    let seconds = timestamp.saturating_sub(now).max(0);
     if seconds == 0 { return "0m".into(); }
-    let total_minutes = (seconds + 59) / 60;
-    let total_hours = (seconds + 3_599) / 3_600;
+    let total_minutes = seconds.saturating_add(59) / 60;
+    let total_hours = seconds.saturating_add(3_599) / 3_600;
     if total_hours >= 24 {
         let days = total_hours / 24;
         let hours = total_hours % 24;
@@ -356,6 +354,32 @@ fn format_countdown(timestamp: i64, now: i64) -> String {
     } else {
         format!("{total_minutes}m")
     }
+}
+
+fn format_reset_text(timestamp: i64, now: i64, config: &AppConfig) -> String {
+    if config.show_reset_clock_time {
+        format_reset_clock(timestamp, now, config.reset_clock_24_hour, &Local)
+    } else {
+        format_countdown(timestamp, now)
+    }
+}
+
+fn format_reset_clock<T: TimeZone>(timestamp: i64, now: i64, use_24_hour: bool, zone: &T) -> String {
+    // Use the space formerly occupied by "resets in" and compact redundant
+    // countdown spacing/zero units so the local clock fits cleanly.
+    let countdown = format_countdown(timestamp, now)
+        .replace(' ', "")
+        .replace("h00m", "h")
+        .replace("d0h", "d");
+    if timestamp <= now { return countdown; }
+    let Some(date) = zone.timestamp_opt(timestamp, 0).single() else { return countdown; };
+    let clock = if use_24_hour {
+        format!("{:02}:{:02}", date.hour(), date.minute())
+    } else {
+        let hour = match date.hour() % 12 { 0 => 12, value => value };
+        format!("{hour}:{:02}{}", date.minute(), if date.hour() < 12 { "am" } else { "pm" })
+    };
+    format!("{countdown} ({clock})")
 }
 
 fn reset_timer_color(window: &RateWindow, now: i64) -> Color {
@@ -593,7 +617,8 @@ fn linear_to_srgb(value: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{ACCOUNT_COLORS, account_view, color_from_name, format_countdown, format_expiry, is_account_color, mask_account_name, model, plan_display_name, primary_window_index, relative_luminance, reset_timer_color, visible_usage_color};
+    use super::{ACCOUNT_COLORS, account_view, color_from_name, format_countdown, format_expiry, format_reset_clock, is_account_color, mask_account_name, model, plan_display_name, primary_window_index, relative_luminance, reset_timer_color, visible_usage_color};
+    use crate::config::AppConfig;
     use crate::domain::{AccountRecord, RateWindow, ResetCredit, UsageSnapshot};
     use chrono::{Local, TimeZone};
     use slint::Model;
@@ -682,6 +707,30 @@ mod tests {
     }
 
     #[test]
+    fn reset_clocks_use_exact_timestamps_in_the_selected_time_zone() {
+        let zone = chrono::FixedOffset::west_opt(3 * 3_600).unwrap();
+        let reset = zone.with_ymd_and_hms(2026, 10, 23, 11, 0, 0).unwrap().timestamp();
+        assert_eq!(format_reset_clock(reset, reset - 3_600, false, &zone), "1h (11:00am)");
+        assert_eq!(format_reset_clock(reset, reset - 3_600, true, &zone), "1h (11:00)");
+        assert_eq!(format_reset_clock(reset, reset - 1, true, &zone), "1m (11:00)");
+        assert_eq!(format_reset_clock(reset, reset - 3_600, true, &chrono::Utc), "1h (14:00)");
+        assert_eq!(format_reset_clock(reset, reset - 6 * 86_400 - 23 * 3_600, false, &zone), "6d23h (11:00am)");
+    }
+
+    #[test]
+    fn reset_clocks_handle_midnight_noon_and_expired_or_invalid_timestamps() {
+        let noon = chrono::Utc.with_ymd_and_hms(2026, 10, 23, 12, 0, 0).unwrap().timestamp();
+        let midnight = noon + 12 * 3_600;
+        assert_eq!(format_reset_clock(noon, noon - 3_600, false, &chrono::Utc), "1h (12:00pm)");
+        assert_eq!(format_reset_clock(midnight, midnight - 600, false, &chrono::Utc), "10m (12:00am)");
+        assert_eq!(format_reset_clock(midnight, midnight - 600, true, &chrono::Utc), "10m (00:00)");
+        assert_eq!(format_reset_clock(noon, noon, true, &chrono::Utc), "0m");
+        assert_eq!(format_reset_clock(noon, noon + 1, false, &chrono::Utc), "0m");
+        assert!(!format_reset_clock(i64::MAX, 0, false, &chrono::Utc).contains('('));
+        assert_eq!(format_countdown(i64::MIN, i64::MAX), "0m");
+    }
+
+    #[test]
     fn banked_resets_can_be_hidden_without_leaving_empty_details() {
         let record = AccountRecord {
             id: "account".into(),
@@ -712,8 +761,10 @@ mod tests {
             last_error: None,
         };
 
-        let shown = account_view(&record, 1, true, true, false);
-        let hidden = account_view(&record, 1, false, true, false);
+        let shown_cfg = AppConfig::default();
+        let hidden_cfg = AppConfig { show_banked_resets: false, ..AppConfig::default() };
+        let shown = account_view(&record, 1, &shown_cfg, false);
+        let hidden = account_view(&record, 1, &hidden_cfg, false);
         assert!(shown.has_reset_credits);
         assert_eq!(shown.reset_credits.row_count(), 1);
         assert!(shown.has_hidden_details);
@@ -753,8 +804,10 @@ mod tests {
             last_error: None,
         };
 
-        let shown = account_view(&record, 1, true, true, false);
-        let hidden = account_view(&record, 1, true, false, false);
+        let shown_cfg = AppConfig::default();
+        let hidden_cfg = AppConfig { show_antigravity_third_party_limits: false, ..AppConfig::default() };
+        let shown = account_view(&record, 1, &shown_cfg, false);
+        let hidden = account_view(&record, 1, &hidden_cfg, false);
         assert_eq!(shown.detail_limits.row_count(), 2);
         assert_eq!(hidden.detail_limits.row_count(), 0);
         assert_eq!(hidden.long_label.as_str(), "Weekly");
@@ -771,14 +824,15 @@ mod tests {
             name_revealed: false, email_revealed: false,
             confirm_credit_id: String::new(), snapshot: None, last_error: None,
         }];
-        let dashboard_height = super::panel_height(&records, true, true);
+        let cfg = AppConfig::default();
+        let dashboard_height = super::panel_height(&records, &cfg);
         assert!(dashboard_height < 520.0);
         assert_eq!(super::settings_panel_height(dashboard_height), 520.0);
         // Going back still uses the compact dashboard calculation.
-        assert_eq!(super::panel_height(&records, true, true), dashboard_height);
+        assert_eq!(super::panel_height(&records, &cfg), dashboard_height);
         records[0].enabled = false;
-        assert_eq!(super::settings_panel_height(super::panel_height(&records, true, true)), 520.0);
-        assert_eq!(super::settings_panel_height(super::panel_height(&[], true, true)), 520.0);
+        assert_eq!(super::settings_panel_height(super::panel_height(&records, &cfg)), 520.0);
+        assert_eq!(super::settings_panel_height(super::panel_height(&[], &cfg)), 520.0);
         assert_eq!(super::settings_panel_height(520.0), 520.0);
         assert_eq!(super::settings_panel_height(super::PANEL_MAX_HEIGHT), super::PANEL_MAX_HEIGHT);
     }
@@ -806,7 +860,8 @@ mod tests {
         disabled_tail.id = "disabled-tail".into();
         disabled_tail.enabled = false;
 
-        let (rows, enabled_count) = model(&[record, last_enabled, disabled_tail], true, true);
+        let cfg = AppConfig::default();
+        let (rows, enabled_count) = model(&[record, last_enabled, disabled_tail], &cfg);
 
         assert_eq!(enabled_count, 2);
         assert!(rows.row_data(0).expect("first row").show_separator);
@@ -831,11 +886,12 @@ mod tests {
         };
         let mut records = [codex, second_codex, claude];
 
-        let (rows, _) = model(&records, true, true);
+        let cfg = AppConfig::default();
+        let (rows, _) = model(&records, &cfg);
         assert!(rows.iter().all(|row| !row.show_accent));
 
         records[1].enabled = true;
-        let (rows, _) = model(&records, true, true);
+        let (rows, _) = model(&records, &cfg);
         assert!(rows.row_data(0).unwrap().show_accent);
         assert!(rows.row_data(1).unwrap().show_accent);
         assert!(!rows.row_data(2).unwrap().show_accent);

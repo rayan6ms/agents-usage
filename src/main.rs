@@ -925,16 +925,8 @@ fn render_ui(
     let records = accounts.lock().map(|value| value.clone()).unwrap_or_default();
     let cfg = config.lock().map(|value| value.clone()).unwrap_or_default();
     sync_provider_icons(ui);
-    let (model, enabled_count) = ui_model::model(
-        &records,
-        cfg.show_banked_resets,
-        cfg.show_antigravity_third_party_limits,
-    );
-    let dashboard_height = ui_model::panel_height(
-        &records,
-        cfg.show_banked_resets,
-        cfg.show_antigravity_third_party_limits,
-    );
+    let (model, enabled_count) = ui_model::model(&records, &cfg);
+    let dashboard_height = ui_model::panel_height(&records, &cfg);
     let height = if ui.get_settings_visible() {
         ui.get_settings_height_px()
     } else {
@@ -946,6 +938,8 @@ fn render_ui(
     ui.set_blur_emails(cfg.blur_emails);
     ui.set_blur_names(cfg.blur_names);
     ui.set_color_reset_timers(cfg.color_reset_timers);
+    ui.set_show_reset_clock_time(cfg.show_reset_clock_time);
+    ui.set_reset_clock_24_hour(cfg.reset_clock_24_hour);
     ui.set_usage_bar_color_mode(cfg.usage_bar_color_mode.as_str().into());
     ui.set_usage_bar_custom_color(ui_model::color_from_name(&cfg.usage_bar_custom_color));
     ui.set_always_show_reset_counter(cfg.always_show_reset_counter);
@@ -2741,6 +2735,34 @@ fn main() -> Result<(), slint::PlatformError> {
         ui.on_always_show_reset_counter_changed(move |value| {
             if let Ok(mut cfg) = config_arc.lock() {
                 cfg.always_show_reset_counter = value;
+            }
+            if let Some(ui) = ui_weak.upgrade() { render_ui(&ui, &accounts, &config_arc, &last_anchor, None); }
+            send(&tx, WorkerCommand::PersistSettings);
+        });
+    }
+    {
+        let ui_weak = ui.as_weak();
+        let accounts = accounts.clone();
+        let config_arc = config.clone();
+        let last_anchor = last_anchor_shared.clone();
+        let tx = tx.clone();
+        ui.on_show_reset_clock_time_changed(move |value| {
+            if let Ok(mut cfg) = config_arc.lock() {
+                cfg.show_reset_clock_time = value;
+            }
+            if let Some(ui) = ui_weak.upgrade() { render_ui(&ui, &accounts, &config_arc, &last_anchor, None); }
+            send(&tx, WorkerCommand::PersistSettings);
+        });
+    }
+    {
+        let ui_weak = ui.as_weak();
+        let accounts = accounts.clone();
+        let config_arc = config.clone();
+        let last_anchor = last_anchor_shared.clone();
+        let tx = tx.clone();
+        ui.on_reset_clock_24_hour_changed(move |value| {
+            if let Ok(mut cfg) = config_arc.lock() {
+                cfg.reset_clock_24_hour = value;
             }
             if let Some(ui) = ui_weak.upgrade() { render_ui(&ui, &accounts, &config_arc, &last_anchor, None); }
             send(&tx, WorkerCommand::PersistSettings);

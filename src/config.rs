@@ -15,6 +15,10 @@ pub struct AppConfig {
     #[serde(default)]
     pub color_reset_timers: bool,
     #[serde(default)]
+    pub show_reset_clock_time: bool,
+    #[serde(default = "default_true")]
+    pub reset_clock_24_hour: bool,
+    #[serde(default)]
     pub usage_bar_color_mode: UsageBarColorMode,
     #[serde(default = "default_usage_bar_custom_color")]
     pub usage_bar_custom_color: String,
@@ -45,6 +49,8 @@ impl Default for AppConfig {
             blur_emails: false,
             blur_names: false,
             color_reset_timers: false,
+            show_reset_clock_time: false,
+            reset_clock_24_hour: true,
             usage_bar_color_mode: UsageBarColorMode::default(),
             usage_bar_custom_color: default_usage_bar_custom_color(),
             always_show_reset_counter: false,

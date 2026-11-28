@@ -426,6 +426,7 @@ component LimitLine inherits Rectangle {
     in property <string> reset-text: "";
     in property <color> reset-color: Palette.foreground;
     in property <bool> show-reset-text: false;
+    in property <bool> show-reset-clock-time: false;
     in property <bool> color-reset-timer: false;
     height: 20px;
     background: transparent;
@@ -437,13 +438,15 @@ component LimitLine inherits Rectangle {
         Rectangle {
             // Fit tightly to the visible label and optional timer so short rows
             // do not leave a gap before the bar, while capping long labels.
-            width: min(156px, label-text.preferred-width + (root.show-reset-text ? timer.preferred-width + 5px : 0px));
+            width: min(172px, label-text.preferred-width + (root.show-reset-text ? timer.preferred-width + 5px : 0px));
             height: parent.height;
             label-text := Text {
                 x: 0px;
                 width: min(self.preferred-width, max(0px, parent.width - (root.show-reset-text ? timer.preferred-width + 5px : 0px)));
                 height: parent.height;
-                text: root.show-reset-text ? root.label + " ·" : root.label;
+                text: root.show-reset-text
+                    ? root.label + (root.show-reset-clock-time ? " •" : " • resets in")
+                    : root.label;
                 color: Palette.foreground;
                 font-size: 10.5px;
                 opacity: 0.82;
@@ -659,6 +662,7 @@ component AccountRow inherits Rectangle {
     in property <bool> blur-names: false;
     in property <bool> blur-emails: false;
     in property <bool> color-reset-timers: false;
+    in property <bool> show-reset-clock-time: false;
     in property <bool> always-show-reset-counter: false;
     in property <string> usage-bar-color-mode: "account";
     in property <color> usage-bar-custom-color: #27bfce;
@@ -784,6 +788,7 @@ component AccountRow inherits Rectangle {
             reset-text: root.account.long-reset-text;
             reset-color: root.account.long-reset-color;
             show-reset-text: (root.account.expanded || root.always-show-reset-counter) && root.account.has-long-reset-time;
+            show-reset-clock-time: root.show-reset-clock-time;
             color-reset-timer: root.color-reset-timers;
         }
         if !root.account.has-usage: Text {
@@ -812,6 +817,7 @@ component AccountRow inherits Rectangle {
             reset-text: root.account.short-reset-text;
             reset-color: root.account.short-reset-color;
             show-reset-text: (root.account.expanded || root.always-show-reset-counter) && root.account.has-short-reset-time;
+            show-reset-clock-time: root.show-reset-clock-time;
             color-reset-timer: root.color-reset-timers;
         }
 
@@ -832,6 +838,7 @@ component AccountRow inherits Rectangle {
                     reset-text: limit.reset-text;
                     reset-color: limit.reset-color;
                     show-reset-text: limit.has-reset-time;
+                    show-reset-clock-time: root.show-reset-clock-time;
                     color-reset-timer: root.color-reset-timers;
                 }
 
@@ -1075,6 +1082,7 @@ component HsvColorPicker inherits Rectangle {
 
 component UsageBarModeButton inherits Rectangle {
     in property <string> label;
+    in property <string> accessible-name: root.label + " usage bar colors";
     in property <bool> selected: false;
     callback clicked();
     height: 27px;
@@ -1084,7 +1092,7 @@ component UsageBarModeButton inherits Rectangle {
     border-color: root.selected ? Palette.foreground : Palette.border;
     background: root.selected ? Palette.alternate-background : area.has-hover ? #ffffff0b : transparent;
     accessible-role: button;
-    accessible-label: root.label + " usage bar colors";
+    accessible-label: root.accessible-name;
     accessible-checked: root.selected;
     accessible-action-default => { root.clicked(); }
 
@@ -1098,6 +1106,40 @@ component UsageBarModeButton inherits Rectangle {
         vertical-alignment: center;
     }
     area := TouchArea { clicked => { root.clicked(); } }
+}
+
+component ResetClockFormatSettings inherits Rectangle {
+    in property <bool> use-24-hour: true;
+    callback format-changed(bool);
+    height: 64px;
+    background: transparent;
+
+    VerticalLayout {
+        spacing: 3px;
+        Text {
+            height: 20px;
+            text: "Reset clock format";
+            color: Palette.foreground;
+            font-size: 11px;
+            vertical-alignment: bottom;
+        }
+        HorizontalLayout {
+            height: 31px;
+            spacing: 5px;
+            UsageBarModeButton {
+                label: "12-hour";
+                accessible-name: "12-hour reset clock";
+                selected: !root.use-24-hour;
+                clicked => { root.format-changed(false); }
+            }
+            UsageBarModeButton {
+                label: "24-hour";
+                accessible-name: "24-hour reset clock";
+                selected: root.use-24-hour;
+                clicked => { root.format-changed(true); }
+            }
+        }
+    }
 }
 
 component UsageBarColorSettings inherits Rectangle {
@@ -1555,6 +1597,8 @@ export component MainWindow inherits Window {
     in-out property <bool> blur-names: false;
     in-out property <bool> blur-emails: false;
     in-out property <bool> color-reset-timers: false;
+    in-out property <bool> show-reset-clock-time: false;
+    in-out property <bool> reset-clock-24-hour: true;
     in-out property <string> usage-bar-color-mode: "account";
     in-out property <color> usage-bar-custom-color: #27bfce;
     in-out property <bool> always-show-reset-counter: false;
@@ -1598,6 +1642,8 @@ export component MainWindow inherits Window {
     callback blur-emails-changed(bool);
     callback blur-names-changed(bool);
     callback color-reset-timers-changed(bool);
+    callback show-reset-clock-time-changed(bool);
+    callback reset-clock-24-hour-changed(bool);
     callback usage-bar-color-mode-changed(string);
     callback usage-bar-custom-color-changed(color);
     callback always-show-reset-counter-changed(bool);
@@ -1714,6 +1760,7 @@ export component MainWindow inherits Window {
                         blur-names: root.blur-names;
                         blur-emails: root.blur-emails;
                         color-reset-timers: root.color-reset-timers;
+                        show-reset-clock-time: root.show-reset-clock-time;
                         always-show-reset-counter: root.always-show-reset-counter;
                         usage-bar-color-mode: root.usage-bar-color-mode;
                         usage-bar-custom-color: root.usage-bar-custom-color;
@@ -1811,6 +1858,16 @@ export component MainWindow inherits Window {
                             subtitle: "Keep countdowns visible while account details are collapsed";
                             checked: root.always-show-reset-counter;
                             changed(value) => { root.always-show-reset-counter-changed(value); }
+                        }
+                        SettingRow {
+                            title: "Show reset clock time";
+                            subtitle: "Replace ‘resets in’ with the countdown and local reset time";
+                            checked: root.show-reset-clock-time;
+                            changed(value) => { root.show-reset-clock-time-changed(value); }
+                        }
+                        if root.show-reset-clock-time: ResetClockFormatSettings {
+                            use-24-hour: root.reset-clock-24-hour;
+                            format-changed(value) => { root.reset-clock-24-hour-changed(value); }
                         }
                         SettingRow {
                             title: "Show banked resets";

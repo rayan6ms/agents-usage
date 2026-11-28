@@ -182,6 +182,21 @@ function countdown(timestamp, now) {
   return `${minutes}m`;
 }
 
+function resetText(timestamp, now) {
+  const duration = countdown(timestamp, now);
+  if (!latestState.show_reset_clock_time) return duration;
+  const compact = duration.replaceAll(" ", "").replace("h00m", "h").replace("d0h", "d");
+  if (timestamp <= now) return compact;
+  const date = new Date(timestamp * 1000);
+  if (!Number.isFinite(date.getTime())) return compact;
+  const hours = date.getHours();
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+  const clock = latestState.reset_clock_24_hour !== false
+    ? `${String(hours).padStart(2, "0")}:${minutes}`
+    : `${hours % 12 || 12}:${minutes}${hours < 12 ? "am" : "pm"}`;
+  return `${compact} (${clock})`;
+}
+
 function timerColor(window, now) {
   const left = Math.max(0, (window.resets_at || now) - now);
   const maximum = (window.duration_mins ?? 10080) * 60;
@@ -199,7 +214,8 @@ function barColor(account, window, accountCount) {
 function limitHtml(account, window, showResetCounter, accountCount) {
   const showReset = showResetCounter && window.resets_at;
   const now = currentServerTime();
-  const reset = showReset ? `<span class="reset-text"> • resets in <span class="reset-timer ${latestState.color_reset_timers ? "colored" : ""}" style="--timer-color:${timerColor(window, now)}">${countdown(window.resets_at, now)}</span></span>` : "";
+  const prefix = latestState.show_reset_clock_time ? " •&nbsp;&nbsp;" : " • resets in ";
+  const reset = showReset ? `<span class="reset-text">${prefix}<span class="reset-timer ${latestState.color_reset_timers ? "colored" : ""}" style="--timer-color:${timerColor(window, now)}">${resetText(window.resets_at, now)}</span></span>` : "";
   return `<div class="limit"><span class="limit-label">${escapeHtml(windowLabel(window, false))}</span>${reset}<span class="bar"><span class="bar-fill" style="--remaining:${remaining(window)};--bar-color:${barColor(account, window, accountCount)}"></span></span><span class="percent">${percent(window)}</span></div>`;
 }
 

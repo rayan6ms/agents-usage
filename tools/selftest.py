@@ -143,7 +143,9 @@ assert 'padding-top: 8px' in ui
 assert 'Personal' not in ui and 'team@anthropic.example' not in ui
 assert 'StatusNotifierTray' in main and 'create_native_tray' in main
 assert 'MoveFileExW' in (root / 'src/config.rs').read_text()
-assert '<span class="reset-text"> • resets in <span class="reset-timer ' in mobile_js
+assert '" • resets in "' in mobile_js and 'class="reset-timer ' in mobile_js
+assert 'show_reset_clock_time' in mobile_js and 'reset_clock_24_hour' in mobile_js
+assert 'Show reset clock time' in ui and 'ResetClockFormatSettings' in ui
 assert '.reset-timer.colored' in mobile_css and '.reset-text.colored' not in mobile_css
 assert '.account:last-child { border-bottom: 0; }' in mobile_css
 assert 'class="warning-icon"' in mobile_js and './warning-icon.svg' in mobile_css
